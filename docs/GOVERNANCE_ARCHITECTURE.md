@@ -64,8 +64,9 @@ embeddings remain deferred and advisory-only.
 
 ## Product Contract Classification
 
-The existing product registry is observed evidence, not the card authority. All
-59 releases and 146 usage records are visible in the browser and classified:
+The locked product registry is observed evidence, not the card authority. All
+59 currently embedded releases and 146 usage records are visible in the browser
+and classified:
 
 | Disposition | Releases | Meaning |
 | --- | ---: | --- |
@@ -77,15 +78,24 @@ Only `boundary` bindings are formal contracts of the new governance model. The
 other entries remain visible so migration does not erase evidence or silently
 misrepresent old contracts as current global rules.
 
+The clean-v1 authoritative source contains 75 candidate contracts across four
+layers. Product projection code and cross-repository installation evidence can
+be developed before publication, but those contracts do not replace the 59
+locked releases in this view until a published source commit, v4 product lock,
+clean Base manifest and formal conformance agree.
+
 ## Removal Boundary
 
 `check_removability.py` runs product and DR probes with the governance location
 present and with a nonexistent governance path. Product API/base/catalog facts,
 DR build digest and DR runtime status must be identical. The independent real
 handoff scenario uses the Workbench authoring API to create, validate, certify
-and package a temporary CF-CRE@2 cartridge, then uses the real DR CLI to trust,
-install, expose and save a public setting, and run it. Missing input and tampered
-packages must be rejected without mutating the active cartridge.
+and package a temporary CF-CRE@2 cartridge. The product clean-v1 projector emits
+the installation request and plan, the real DR store verifies, materializes and
+activates them, and the product contract validator checks DR's result. DR then
+exposes and saves a public setting and runs the cartridge. Missing input and
+tampered packages must be rejected without mutating the active cartridge; the
+tampered path must return a valid failed clean-v1 result.
 
 ## Evidence And Acceptance
 

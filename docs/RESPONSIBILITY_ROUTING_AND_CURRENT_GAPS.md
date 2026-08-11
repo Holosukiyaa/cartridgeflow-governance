@@ -238,9 +238,9 @@ python scripts/run_conformance.py --quiet
 python scripts/audit_protocol_governance.py
 ```
 
-两个命令即使前一个失败也都会执行，任一失败都会阻断 floor 和 complete。当前工作区中两者确实因嵌入协议源数据库摘要和提交不匹配产品锁而失败；治理只报告该事实，不修改正在由其他工作处理的协议源或产品锁。
+两个命令即使前一个失败也都会执行，任一失败都会阻断 floor 和 complete。当前权威协议源已经形成 clean-v1 四层 75 合同候选，产品也有四层投影与 clean Base 候选；但源提交尚未发布，嵌入式产品 Registry、v3 锁和正式 Base 仍属于 unified-v1。治理必须继续把这种不一致报告为 blocker，不能用本地候选证据冒充正式切换。
 
-### 5.5 Boundary 检查偏结构性，行为证据不足
+### 5.5 Boundary 检查仍需逐条增加行为证据
 
 当前边界检查能证明生产者、消费者、接口声明、合同绑定和楼层检查器存在，但不能单独证明：
 
@@ -249,13 +249,13 @@ python scripts/audit_protocol_governance.py
 - 升级、失败和回滚语义一致；
 - 跨 Python 与 Go 的兼容性结论一致。
 
-关键 Boundary 需要真实契约测试或跨仓库场景，不能只依赖关系元数据。
+工作台到 DR 的安装交界已有跨语言行为证据；其余关键 Boundary 仍需要真实契约测试或跨仓库场景，不能只依赖关系元数据。
 
-### 5.6 工作台到 DR 已升级为真实 CF-CRE@2 场景
+### 5.6 工作台到 DR 已升级为 CF-CRE@2 + clean-v1 真实场景
 
-场景现在由真实 Workbench API 创建、保存、调优、验证和认证 Flow，再用现有产品 CF-CRE@2 构建器生成签名包。真实 DR CLI 完成信任、安装、公开设置读取与保存、必需输入拒绝、成功交付和篡改包拒绝，并验证失败不会改变活动卡带。
+场景现在由真实 Workbench API 创建、保存、调优、验证和认证 Flow，再用现有产品 CF-CRE@2 构建器生成签名包。产品 clean Distribution 投影器从临时 v4 Registry 生成 installation request/plan，DR 的真实 Go Store 完成验签、物化和激活并返回 installation result；成功与篡改失败结果都由产品 clean Schema 反向验证。随后 DR 完成公开设置读取与保存、必需输入拒绝和成功交付，篡改失败不得改变活动卡带。
 
-当前 Workbench 包装 API 仍硬编码 CF-CRE@1，因此场景明确记录其实际打包入口为 `core.protocol.build_release_archive`，不伪称工作台包装 API 已支持 v2。工具资源解析和非空声明式 UI 的宿主投影仍是后续边界场景缺口。
+当前 Workbench 包装 API 仍硬编码 CF-CRE@1，因此场景明确记录其实际打包入口为 `core.protocol.build_release_archive`，不伪称工作台包装 API 已支持 v2。clean Base 也仍是候选而非正式活动清单。工具资源解析和非空声明式 UI 的宿主投影仍是后续边界场景缺口。
 
 ### 5.7 责任路由核心失败路径和 Knowledge 来源漂移已有测试
 
@@ -273,7 +273,7 @@ python scripts/audit_protocol_governance.py
 
 ### 5.8 权威发布和仓库状态尚不可复现
 
-治理仓库已建立首个可审阅 Git 基线。CartridgeFlow 和 DR 仍存在工作区变化，DR 还是 CartridgeFlow 目录中的未跟踪嵌套仓库；这些目标仓库状态不能由治理数据库替代。
+治理仓库已建立可审阅 Git 基线。clean 产品投影和 DR clean 消费者分别具有目标仓提交，但 CartridgeFlow 仍存在其他工作区变化，DR 仍是 CartridgeFlow 目录中的独立嵌套仓库，协议源提交也尚未发布；这些目标仓库状态不能由治理数据库替代。
 
 数据库摘要可以证明某个文件内容没有变化，但不能替代代码、检查器、目标配置和数据库发布物的可审阅 Git 历史。
 
@@ -359,10 +359,11 @@ python scripts/audit_protocol_governance.py
 - 在精确足迹完成前保留全局摘要的保守失效；完成后将新鲜度收窄到真实依赖。
 - 保持 Knowledge 正文只描述当前状态，并继续禁止 Knowledge 进入 `card_revision`。
 
-### P1-5：补强 CF-CRE@2 真实边界（部分完成）
+### P1-5：补强 CF-CRE@2 与 clean-v1 真实边界（部分完成）
 
-- 已增加 CF-CRE@2 公共设置的工作台到 DR 场景；非空 UI 投影和工具资源仍待补充。
-- 为关键跨语言合同增加生产者/消费者等价性测试。
+- 已增加 CF-CRE@2 公共设置的工作台到 DR 场景，并覆盖 clean 安装 request/plan/result 的 Python-Go 等价性、成功和篡改失败。
+- 非空 UI 投影和工具资源仍待补充。
+- 为其他关键跨语言合同继续增加生产者/消费者等价性测试。
 - 明确每个 Boundary 的行为证据，而不仅是结构绑定。
 
 ### P1：建立可复现发布基线
@@ -383,7 +384,7 @@ python scripts/audit_protocol_governance.py
 - [x] 产品正式验收入口不依赖卡片选择即可运行；
 - [x] 静态、楼层、边界、场景和完整验收状态分开展示；
 - [x] 产品协议锁失配会成为治理 blocker；
-- [x] CF-CRE@2 真实交付场景通过；
+- [x] CF-CRE@2 + clean-v1 安装真实交付场景通过；
 - [x] 当前治理测试全部通过；
 - [ ] 一次 AI 修改可完整回溯到路由、差异、检查计划、检查结果和知识同步事件；
 - [x] 无关 Knowledge 变化不会使其他自治区域的精确证据失效。

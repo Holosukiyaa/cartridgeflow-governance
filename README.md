@@ -7,9 +7,11 @@ runtime or build dependency of either product.
 
 The current catalog contains 23 cards: one constitution, five real dependency
 floors, seven cross-floor boundaries, nine reusable knowledge cards, and one
-task template. The product contract registry is observed rather than adopted as
-governance authority: all 59 releases have an explicit `boundary`, `knowledge`,
-or `legacy-review` disposition.
+task template. The locked product registry is observed rather than adopted as
+governance authority: all 59 currently embedded releases have an explicit
+`boundary`, `knowledge`, or `legacy-review` disposition. The unpublished
+clean-v1 source has 75 candidate contracts and remains separate until the
+product is relocked.
 
 ## Dependency Rule
 
