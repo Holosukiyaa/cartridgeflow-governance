@@ -74,6 +74,8 @@ class CardBrowserTests(unittest.TestCase):
         self.assertIn("此卡只表达当前可复用知识，不保存历史", response.text)
         self.assertIn("审核摘要", response.text)
         self.assertIn("当前摘要", response.text)
+        self.assertIn("关键事实断言", response.text)
+        self.assertIn("assertion.knowledge.kernel-architecture.foundation-projector", response.text)
         self.assertNotIn("rNone", response.text)
 
     def test_dashboard_shows_knowledge_anchor_state(self) -> None:

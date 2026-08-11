@@ -261,6 +261,7 @@ def create_app(
         knowledge_strip = (
             '<section class="acceptance-strip" aria-label="Knowledge 状态">'
             '<div><span>Knowledge 当前</span>' + _badge(str(knowledge_counts.get("current", 0)), "ok") + '</div>'
+            '<div><span>Knowledge 冲突</span>' + _badge(str(knowledge_counts.get("conflict", 0)), "danger" if knowledge_counts.get("conflict", 0) else "neutral") + '</div>'
             '<div><span>Knowledge 漂移</span>' + _badge(str(knowledge_counts.get("stale", 0)), "danger" if knowledge_counts.get("stale", 0) else "neutral") + '</div>'
             '<div><span>Knowledge 未知</span>' + _badge(str(knowledge_counts.get("unknown", 0)), "warning" if knowledge_counts.get("unknown", 0) else "neutral") + '</div>'
             '</section>'
@@ -660,6 +661,23 @@ def create_app(
             "SELECT * FROM knowledge_profile WHERE card_id = ?",
             (card_id,),
         )
+        knowledge_assertions = _rows(
+            app.state.source_path,
+            "SELECT * FROM knowledge_assertion WHERE card_id = ? ORDER BY assertion_id",
+            (card_id,),
+        )
+        knowledge_assertion_status = {
+            str(item["assertion_id"]): item
+            for item in _rows(
+                app.state.index_path,
+                "SELECT * FROM knowledge_assertion_status WHERE card_id = ? ORDER BY assertion_id",
+                (card_id,),
+            )
+        }
+        for assertion in knowledge_assertions:
+            observed = knowledge_assertion_status.get(str(assertion["assertion_id"]), {})
+            assertion["status"] = observed.get("status", "unknown")
+            assertion["actual_json"] = observed.get("actual_json", "null")
         task_directives = _rows(
             app.state.source_path,
             "SELECT * FROM task_directive WHERE card_id = ? ORDER BY directive_kind, item_order",
@@ -770,6 +788,19 @@ def create_app(
                 _e(item["purpose"]),
             ] for item in source_references],
         )
+        assertion_table = _table(
+            ["事实", "目标", "文件", "类型", "状态", "期望", "实际"],
+            [[
+                f'<code>{_e(item["assertion_id"])}</code>',
+                _e(item["target_id"]),
+                f'<code>{_e(item["artifact_path"])}</code>',
+                _badge(str(item["assertion_kind"])),
+                _badge(str(item["status"]), "ok" if item["status"] == "current" else "danger" if item["status"] == "conflict" else "warning"),
+                f'<code>{_e(item["expected_json"])}</code>',
+                f'<code>{_e(item["actual_json"])}</code>',
+            ] for item in knowledge_assertions],
+            "该卡片没有机器可判定的关键事实",
+        )
         contract_table = _table(
             ["合同", "版本", "角色", "分类", "匹配"],
             [
@@ -800,7 +831,12 @@ def create_app(
         profile_section = ""
         if knowledge_profile:
             profile = knowledge_profile[0]
-            profile_status = next(iter(knowledge_source_status.values()), {}).get("status", "unknown")
+            aggregate = _rows(
+                app.state.index_path,
+                "SELECT status FROM knowledge_status WHERE card_id = ?",
+                (card_id,),
+            )
+            profile_status = aggregate[0]["status"] if aggregate else "unknown"
             profile_section = (
                 '<section class="content-section knowledge-profile"><div class="section-heading"><h2>知识卡定位</h2>'
                 '<span>当前可复用知识 · 无修订历史 · ' + _e(str(profile_status)) + '</span></div>'
@@ -827,6 +863,7 @@ def create_app(
             + f'<section class="content-section"><div class="section-heading"><h2>有效与无效示例</h2></div>{example_table}</section>'
             + f'<section class="content-section"><div class="section-heading"><h2>证据要求</h2></div>{evidence_table}</section>'
             + f'<section class="content-section"><div class="section-heading"><h2>源码依据</h2></div>{source_table}</section>'
+            + (f'<section class="content-section"><div class="section-heading"><h2>关键事实断言</h2><span>受限判定，不执行卡片命令</span></div>{assertion_table}</section>' if knowledge_assertions else "")
             + f'<section class="content-section"><div class="section-heading"><h2>产品合同分类</h2></div>{contract_table}</section>'
             + (f'<section class="content-section"><div class="section-heading"><h2>任务指令</h2></div>{directive_table}</section>' if task_directives else "")
             + f'<section class="content-section"><div class="section-heading"><h2>关系</h2></div>{relation_table}</section>'

@@ -28,8 +28,8 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_TARGETS = ROOT / "targets.json"
 DEFAULT_INDEX = ROOT / ".data" / "governance-index.sqlite"
 INDEX_SCHEMA = ROOT / "schema" / "governance_index.sql"
-INDEX_DATABASE_SCHEMA = "cartridgeflow.governance.index.v4"
-SCANNER_VERSION = "0.6.0"
+INDEX_DATABASE_SCHEMA = "cartridgeflow.governance.index.v5"
+SCANNER_VERSION = "0.7.0"
 SEVERITY_RANK = {"info": 0, "warning": 1, "error": 2, "blocker": 3}
 TYPESCRIPT_EXTRACTOR = ROOT / "scripts" / "extract_typescript_imports.mjs"
 TYPESCRIPT_SUFFIXES = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
@@ -177,6 +177,10 @@ def _governance_facts_digest(connection: sqlite3.Connection) -> str:
         "knowledge_sources": connection.execute(
             "SELECT source_ref_id, card_id, expected_digest, observed_digest, status "
             "FROM knowledge_source_status ORDER BY source_ref_id"
+        ).fetchall(),
+        "knowledge_assertions": connection.execute(
+            "SELECT assertion_id, card_id, target_id, artifact_id, expected_json, actual_json, status "
+            "FROM knowledge_assertion_status ORDER BY assertion_id"
         ).fetchall(),
         "context_chunks": connection.execute(
             "SELECT chunk_id, card_id, source_kind, source_id, content_digest FROM context_chunk ORDER BY chunk_id"
@@ -1353,6 +1357,155 @@ def _insert_knowledge_source_status(
         )
 
 
+def _resolve_json_pointer(value: Any, pointer: str) -> Any:
+    current = value
+    for raw_token in pointer.split("/")[1:]:
+        token = raw_token.replace("~1", "/").replace("~0", "~")
+        if isinstance(current, dict):
+            if token not in current:
+                raise KeyError(token)
+            current = current[token]
+        elif isinstance(current, list):
+            if not token.isdigit() or int(token) >= len(current):
+                raise KeyError(token)
+            current = current[int(token)]
+        else:
+            raise KeyError(token)
+    return current
+
+
+def evaluate_knowledge_assertion(
+    target_path: Path,
+    assertion: dict[str, Any],
+    *,
+    indexed: bool,
+) -> tuple[str, Any, str]:
+    """Evaluate one reviewed fact without executing card-provided code."""
+    artifact_path = str(assertion["artifact_path"]).replace("\\", "/")
+    candidate = (target_path / artifact_path).resolve()
+    try:
+        candidate.relative_to(target_path)
+    except ValueError:
+        return "unknown", None, "assertion artifact escapes the target repository"
+
+    kind = str(assertion["assertion_kind"])
+    if kind == "artifact_exists":
+        actual = indexed and candidate.is_file()
+        return (
+            ("current", True, "artifact is present in the governed index")
+            if actual
+            else ("conflict", False, "reviewed artifact is absent from the governed index")
+        )
+    if not indexed or not candidate.is_file():
+        return "conflict", None, "reviewed assertion artifact is absent from the governed index"
+    try:
+        text = candidate.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return "unknown", None, f"assertion artifact cannot be read as UTF-8: {exc}"
+
+    expected = json.loads(str(assertion["expected_json"]))
+    if kind == "text_contains":
+        actual = expected in text
+        return (
+            ("current", True, "reviewed text is present")
+            if actual
+            else ("conflict", False, "reviewed text is absent")
+        )
+    if kind == "json_pointer_equals":
+        try:
+            document = json.loads(text)
+            actual = _resolve_json_pointer(document, str(assertion["selector"]))
+        except (json.JSONDecodeError, KeyError) as exc:
+            return "conflict", None, f"reviewed JSON pointer does not resolve: {exc}"
+        return (
+            ("current", actual, "reviewed JSON value matches")
+            if actual == expected
+            else ("conflict", actual, "reviewed JSON value differs")
+        )
+    return "unknown", None, f"unsupported assertion kind: {kind}"
+
+
+def _insert_knowledge_assertion_status(
+    connection: sqlite3.Connection,
+    source: Path,
+    config: dict[str, Any],
+) -> None:
+    target_paths = {
+        str(item["id"]): (ROOT / str(item["path"])).resolve()
+        for item in config.get("targets", [])
+        if item.get("validate_knowledge_anchors", False)
+    }
+    source_connection = sqlite3.connect(f"{source.resolve().as_uri()}?mode=ro", uri=True)
+    source_connection.row_factory = sqlite3.Row
+    try:
+        assertions = source_connection.execute(
+            "SELECT assertion.*, profile.floor_card_id FROM knowledge_assertion AS assertion "
+            "JOIN card ON card.card_id = assertion.card_id "
+            "JOIN knowledge_profile AS profile ON profile.card_id = assertion.card_id "
+            "WHERE card.status = 'active' AND card.card_type = 'knowledge' "
+            "ORDER BY assertion.assertion_id"
+        ).fetchall()
+    finally:
+        source_connection.close()
+
+    for row in assertions:
+        item = dict(row)
+        target_id = str(item["target_id"])
+        target_path = target_paths.get(target_id)
+        if target_path is None:
+            continue
+        artifact = connection.execute(
+            "SELECT artifact_id FROM observed_artifact WHERE target_id = ? AND artifact_path = ?",
+            (target_id, str(item["artifact_path"]).replace("\\", "/")),
+        ).fetchone()
+        status, actual, reason = evaluate_knowledge_assertion(
+            target_path,
+            item,
+            indexed=artifact is not None,
+        )
+        expected = json.loads(str(item["expected_json"]))
+        details = {
+            "actual": actual,
+            "artifact_path": item["artifact_path"],
+            "assertion_id": item["assertion_id"],
+            "assertion_kind": item["assertion_kind"],
+            "boundary_card_id": None,
+            "expected": expected,
+            "floor_card_id": item["floor_card_id"],
+            "reason": reason,
+            "rationale": item["rationale"],
+            "selector": item["selector"],
+            "target_id": target_id,
+        }
+        artifact_id = str(artifact["artifact_id"]) if artifact is not None else None
+        connection.execute(
+            "INSERT INTO knowledge_assertion_status VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                item["assertion_id"], item["card_id"], item["floor_card_id"], target_id,
+                artifact_id, item["assertion_kind"], item["selector"], item["expected_json"],
+                canonical_json(actual), status, canonical_json(details),
+            ),
+        )
+        if status == "current":
+            continue
+        finding_id = hashlib.sha256(
+            f"knowledge-assertion:{item['assertion_id']}:{status}".encode("utf-8")
+        ).hexdigest()
+        connection.execute(
+            "INSERT INTO finding VALUES (?, ?, ?, 'constitution.knowledge-facts-current', "
+            "?, ?, ?, ?, 'open')",
+            (
+                finding_id,
+                "error" if status == "conflict" else "warning",
+                f"knowledge-fact-{status}",
+                item["card_id"],
+                artifact_id,
+                f"Knowledge fact is {status}: {target_id}:{item['artifact_path']}",
+                canonical_json(details),
+            ),
+        )
+
+
 def build_index(source: Path, targets_path: Path, target: Path) -> None:
     source_errors = verify_source_database(source)
     if source_errors:
@@ -1375,7 +1528,7 @@ def build_index(source: Path, targets_path: Path, target: Path) -> None:
         connection.executescript(INDEX_SCHEMA.read_text(encoding="utf-8"))
         metadata = {
             "schema": INDEX_DATABASE_SCHEMA,
-            "schema_version": "4",
+            "schema_version": "5",
             "scanner_version": SCANNER_VERSION,
             "card_source_publication_id": source_identity["publication_id"],
             "card_source_publication_digest": source_identity["publication_digest"],
@@ -1387,6 +1540,9 @@ def build_index(source: Path, targets_path: Path, target: Path) -> None:
                 item.get("contract_registry") for item in config.get("targets", [])
             ) else "0",
             "knowledge_anchor_scanning_required": "1" if any(
+                item.get("validate_knowledge_anchors", False) for item in config.get("targets", [])
+            ) else "0",
+            "knowledge_assertion_scanning_required": "1" if any(
                 item.get("validate_knowledge_anchors", False) for item in config.get("targets", [])
             ) else "0",
         }
@@ -1403,6 +1559,7 @@ def build_index(source: Path, targets_path: Path, target: Path) -> None:
         _insert_observed_contracts(connection, source, config)
         _check_source_references(connection, source, config)
         _insert_knowledge_source_status(connection, source, config)
+        _insert_knowledge_assertion_status(connection, source, config)
         _insert_context_chunks(connection, source)
         connection.execute(
             "INSERT INTO registry_metadata VALUES ('parser_versions', ?)",
@@ -1430,8 +1587,8 @@ def build_index(source: Path, targets_path: Path, target: Path) -> None:
 
 def verify_index_connection(connection: sqlite3.Connection) -> list[str]:
     errors: list[str] = []
-    if connection.execute("PRAGMA user_version").fetchone()[0] != 4:
-        errors.append("index SQLite user_version must be 4")
+    if connection.execute("PRAGMA user_version").fetchone()[0] != 5:
+        errors.append("index SQLite user_version must be 5")
     if connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
         errors.append("SQLite integrity check failed")
     if connection.execute("PRAGMA foreign_key_check").fetchall():
@@ -1439,8 +1596,8 @@ def verify_index_connection(connection: sqlite3.Connection) -> list[str]:
     metadata = dict(connection.execute("SELECT key, value FROM registry_metadata"))
     if metadata.get("schema") != INDEX_DATABASE_SCHEMA:
         errors.append(f"index schema must be {INDEX_DATABASE_SCHEMA}")
-    if metadata.get("schema_version") != "4":
-        errors.append("index schema_version must be 4")
+    if metadata.get("schema_version") != "5":
+        errors.append("index schema_version must be 5")
     if metadata.get("scanner_version") != SCANNER_VERSION:
         errors.append(f"index scanner_version must be {SCANNER_VERSION}")
     try:
@@ -1469,6 +1626,10 @@ def verify_index_connection(connection: sqlite3.Connection) -> list[str]:
         "SELECT COUNT(*) FROM knowledge_source_status"
     ).fetchone()[0] == 0:
         errors.append("index must contain Knowledge source status facts")
+    if metadata.get("knowledge_assertion_scanning_required") == "1" and connection.execute(
+        "SELECT COUNT(*) FROM knowledge_assertion_status"
+    ).fetchone()[0] == 0:
+        errors.append("index must contain Knowledge assertion status facts")
     unmatched_contracts = connection.execute(
         "SELECT COUNT(*) FROM observed_contract AS contract WHERE NOT EXISTS ("
         "SELECT 1 FROM card_contract_match AS match WHERE match.contract_key = contract.contract_key "
@@ -1482,7 +1643,7 @@ def verify_index_connection(connection: sqlite3.Connection) -> list[str]:
         "SELECT COUNT(*) FROM sqlite_master WHERE lower(name) LIKE '%embedding%'"
     ).fetchone()[0]
     if embedding_objects:
-        errors.append("embedding indexes are deferred and must not participate in normative index v3")
+        errors.append("embedding indexes are deferred and must not participate in normative index v5")
     mismatched_targets = connection.execute(
         "SELECT target.target_id FROM target_revision AS target "
         "LEFT JOIN observed_artifact AS artifact ON artifact.target_id = target.target_id "
@@ -1596,6 +1757,13 @@ def index_summary(path: Path) -> dict[str, Any]:
                 for row in connection.execute(
                     "SELECT status, COUNT(*) AS count, SUM(matched_artifact_count) AS artifact_count "
                     "FROM knowledge_source_status GROUP BY status ORDER BY status"
+                )
+            ],
+            "knowledge_assertions": [
+                dict(row)
+                for row in connection.execute(
+                    "SELECT status, COUNT(*) AS count FROM knowledge_assertion_status "
+                    "GROUP BY status ORDER BY status"
                 )
             ],
             "findings": [

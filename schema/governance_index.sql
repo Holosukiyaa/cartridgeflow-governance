@@ -1,5 +1,5 @@
 PRAGMA application_id = 1128681556;
-PRAGMA user_version = 4;
+PRAGMA user_version = 5;
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE registry_metadata (
@@ -117,6 +117,20 @@ CREATE TABLE knowledge_source_status (
     details_json TEXT NOT NULL CHECK (json_valid(details_json))
 ) STRICT;
 
+CREATE TABLE knowledge_assertion_status (
+    assertion_id TEXT PRIMARY KEY,
+    card_id TEXT NOT NULL,
+    floor_card_id TEXT NOT NULL,
+    target_id TEXT NOT NULL REFERENCES target_revision(target_id) ON DELETE CASCADE,
+    artifact_id TEXT REFERENCES observed_artifact(artifact_id) ON DELETE CASCADE,
+    assertion_kind TEXT NOT NULL,
+    selector TEXT NOT NULL,
+    expected_json TEXT NOT NULL CHECK (json_valid(expected_json)),
+    actual_json TEXT NOT NULL CHECK (json_valid(actual_json)),
+    status TEXT NOT NULL CHECK (status IN ('current', 'conflict', 'unknown')),
+    details_json TEXT NOT NULL CHECK (json_valid(details_json))
+) STRICT;
+
 CREATE TABLE context_chunk (
     chunk_id TEXT PRIMARY KEY,
     card_id TEXT NOT NULL,
@@ -154,6 +168,8 @@ CREATE INDEX contract_usage_idx ON observed_contract_usage(contract_key, directi
 CREATE INDEX contract_match_card_idx ON card_contract_match(card_id, match_status);
 CREATE INDEX knowledge_source_card_idx ON knowledge_source_status(card_id, status, source_ref_id);
 CREATE INDEX knowledge_source_target_idx ON knowledge_source_status(target_id, status, source_ref_id);
+CREATE INDEX knowledge_assertion_card_idx ON knowledge_assertion_status(card_id, status, assertion_id);
+CREATE INDEX knowledge_assertion_target_idx ON knowledge_assertion_status(target_id, status, assertion_id);
 CREATE INDEX context_chunk_card_idx ON context_chunk(card_id, source_kind, source_id);
 
 CREATE VIEW coverage_catalog AS
@@ -203,13 +219,24 @@ FROM observed_contract AS contract
 LEFT JOIN card_contract_match AS match ON match.contract_key = contract.contract_key;
 
 CREATE VIEW knowledge_status AS
+WITH signals AS (
+    SELECT card_id, floor_card_id, status,
+           1 AS source_reference_count, matched_artifact_count, 0 AS assertion_count
+    FROM knowledge_source_status
+    UNION ALL
+    SELECT card_id, floor_card_id, status,
+           0 AS source_reference_count, 0 AS matched_artifact_count, 1 AS assertion_count
+    FROM knowledge_assertion_status
+)
 SELECT card_id, floor_card_id,
        CASE
+         WHEN SUM(CASE WHEN status = 'conflict' THEN 1 ELSE 0 END) > 0 THEN 'conflict'
          WHEN SUM(CASE WHEN status = 'unknown' THEN 1 ELSE 0 END) > 0 THEN 'unknown'
          WHEN SUM(CASE WHEN status = 'stale' THEN 1 ELSE 0 END) > 0 THEN 'stale'
          ELSE 'current'
        END AS status,
-       COUNT(*) AS source_reference_count,
-       SUM(matched_artifact_count) AS matched_artifact_count
-FROM knowledge_source_status
+       SUM(source_reference_count) AS source_reference_count,
+       SUM(matched_artifact_count) AS matched_artifact_count,
+       SUM(assertion_count) AS assertion_count
+FROM signals
 GROUP BY card_id, floor_card_id;

@@ -12,7 +12,7 @@ from scripts.governance_db import GovernanceDatabaseError, build_database, expor
 
 def publication() -> dict:
     package = {
-        "schema": "cartridgeflow.governance.card-publication.v3",
+        "schema": "cartridgeflow.governance.card-publication.v4",
         "publication_id": "test-publication",
         "published_at": "2026-08-11T00:00:00Z",
         "cards": [
@@ -419,6 +419,18 @@ class GovernanceDatabaseTests(unittest.TestCase):
                 "non_goals": "No history or normative rules",
             }
         ]
+        package["knowledge_assertions"] = [
+            {
+                "assertion_id": "assertion.knowledge.producer.fixture",
+                "card_id": "knowledge.producer",
+                "target_id": "test",
+                "artifact_path": "producer/fixture.py",
+                "assertion_kind": "text_contains",
+                "selector": "",
+                "expected_json": json.dumps("producer knowledge", ensure_ascii=False),
+                "rationale": "A reviewed critical claim used by the fixture.",
+            }
+        ]
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "governance.sqlite"
             build_database(package, database)
@@ -426,6 +438,7 @@ class GovernanceDatabaseTests(unittest.TestCase):
             exported = export_database(database)
             self.assertIsNone(next(card for card in exported["cards"] if card["card_id"] == "knowledge.producer")["revision"])
             self.assertFalse(any(item["card_id"] == "knowledge.producer" for item in exported["card_revisions"]))
+            self.assertEqual(package["knowledge_assertions"], exported["knowledge_assertions"])
 
             unanchored = copy.deepcopy(package)
             source_reference = next(

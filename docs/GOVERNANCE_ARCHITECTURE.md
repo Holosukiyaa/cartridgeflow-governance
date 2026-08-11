@@ -34,7 +34,9 @@ file. It explains purpose, stable concepts, navigation, working patterns and
 pitfalls. It must not record what happened on a date, who changed something, a
 sequence of past work, or pipeline history. It owns no compliance rule. Its
 source references and content digest prove that the current explanation is
-anchored to current implementation.
+anchored to current implementation. Reviewed `knowledge_assertion` rows expose
+only selected critical claims to the global constitution's deterministic
+checker; the card still owns no rule or executable command.
 
 ## Deterministic Control Loop
 
@@ -56,7 +58,7 @@ exact task paths / Git diff       public contract id + version
                          exact append-only Ledger footprint
 ```
 
-The generated index currently covers 199 governed artifacts and 2,561 symbols.
+The generated index currently covers 211 governed artifacts and 2,714 symbols.
 It records Python AST, TypeScript Compiler API and Tree-sitter Go dependencies.
 Semantic search does not participate in ownership, dependencies, compliance or
 acceptance. Deterministic context chunks and FTS support retrieval; optional
@@ -95,7 +97,9 @@ the installation request and plan, the real DR store verifies, materializes and
 activates them, and the product contract validator checks DR's result. DR then
 exposes and saves a public setting and runs the cartridge. Missing input and
 tampered packages must be rejected without mutating the active cartridge; the
-tampered path must return a valid failed clean-v1 result.
+tampered path must return a valid failed clean-v1 result. The same package has a
+non-empty passive UI and a local resource role that DR resolves to a host
+`remote_api` connection and actually invokes during the run.
 
 ## Evidence And Acceptance
 

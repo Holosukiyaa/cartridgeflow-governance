@@ -19,7 +19,8 @@ package with settings and UI contracts, and projects a clean-v1 installation
 request and plan. A temporary DR verifies, materializes and activates the
 package, returns a product-validated clean-v1 result, consumes and persists a
 public cartridge setting, rejects missing required input, completes a valid run
-with the expected delivery, and rejects a tampered package with a failed
+through a host-bound `remote_api` resource, serves the package's non-empty
+passive UI, produces the expected delivery, and rejects a tampered package with a failed
 clean-v1 result without changing active state. The scenario cleans the temporary
 product and DR data.
 

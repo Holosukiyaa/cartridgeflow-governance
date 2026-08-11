@@ -15,8 +15,8 @@ from typing import Any, Iterable
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATABASE = ROOT / "governance-source.sqlite"
 SCHEMA_PATH = ROOT / "schema" / "governance_source.sql"
-PUBLICATION_SCHEMA = "cartridgeflow.governance.card-publication.v3"
-DATABASE_SCHEMA = "cartridgeflow.governance.cards.v3"
+PUBLICATION_SCHEMA = "cartridgeflow.governance.card-publication.v4"
+DATABASE_SCHEMA = "cartridgeflow.governance.cards.v4"
 
 
 class GovernanceDatabaseError(RuntimeError):
@@ -176,6 +176,13 @@ def _insert_rows(connection: sqlite3.Connection, package: dict[str, Any]) -> Non
             "knowledge_profile",
             ("card_id", "floor_card_id", "audience", "applicability", "non_goals"),
         ),
+        "knowledge_assertions": (
+            "knowledge_assertion",
+            (
+                "assertion_id", "card_id", "target_id", "artifact_path", "assertion_kind",
+                "selector", "expected_json", "rationale",
+            ),
+        ),
         "task_directives": (
             "task_directive",
             ("directive_id", "card_id", "directive_kind", "item_order", "value"),
@@ -227,7 +234,7 @@ def build_database(package: dict[str, Any], target: Path) -> None:
         connection.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
         metadata = {
             "schema": DATABASE_SCHEMA,
-            "schema_version": "3",
+            "schema_version": "4",
             "publication_id": str(package["publication_id"]),
             "published_at": str(package["published_at"]),
             "publication_digest": digest_json(package),
@@ -296,8 +303,8 @@ def verify_connection(connection: sqlite3.Connection, *, root: Path | None = Non
     metadata = dict(connection.execute("SELECT key, value FROM registry_metadata"))
     if metadata.get("schema") != DATABASE_SCHEMA:
         errors.append(f"registry schema must be {DATABASE_SCHEMA}")
-    if metadata.get("schema_version") != "3":
-        errors.append("registry schema_version must be 3")
+    if metadata.get("schema_version") != "4":
+        errors.append("registry schema_version must be 4")
     if metadata.get("embedding_policy") != "deferred-advisory-only":
         errors.append("embedding policy must remain deferred and advisory-only")
 
@@ -430,6 +437,38 @@ def verify_connection(connection: sqlite3.Connection, *, root: Path | None = Non
                 errors.append(
                     f"knowledge source reference anchor is not lowercase SHA-256: {card_id}:{source_ref_id}"
                 )
+        assertion_count = connection.execute(
+            "SELECT COUNT(*) FROM knowledge_assertion WHERE card_id = ?", (card_id,)
+        ).fetchone()[0]
+        if assertion_count == 0:
+            errors.append(f"knowledge card lacks a reviewed machine assertion: {card_id}")
+
+    for row in connection.execute(
+        "SELECT assertion.*, card.card_type FROM knowledge_assertion AS assertion "
+        "JOIN card ON card.card_id = assertion.card_id ORDER BY assertion.assertion_id"
+    ):
+        if row["card_type"] != "knowledge":
+            errors.append(f"knowledge assertion belongs to a non-Knowledge card: {row['assertion_id']}")
+        artifact_path = str(row["artifact_path"]).replace("\\", "/")
+        if (
+            not artifact_path
+            or artifact_path.startswith("/")
+            or any(part in {"", ".", ".."} for part in artifact_path.split("/"))
+        ):
+            errors.append(f"knowledge assertion artifact path is unsafe: {row['assertion_id']}")
+        try:
+            expected = json.loads(str(row["expected_json"]))
+        except json.JSONDecodeError:
+            errors.append(f"knowledge assertion expected_json is invalid: {row['assertion_id']}")
+            continue
+        kind = str(row["assertion_kind"])
+        selector = str(row["selector"])
+        if kind == "artifact_exists" and (expected is not True or selector):
+            errors.append(f"artifact_exists assertion must expect true without a selector: {row['assertion_id']}")
+        elif kind == "text_contains" and (not isinstance(expected, str) or not expected or selector):
+            errors.append(f"text_contains assertion must expect a non-empty string without a selector: {row['assertion_id']}")
+        elif kind == "json_pointer_equals" and not selector.startswith("/"):
+            errors.append(f"json_pointer_equals assertion requires an absolute JSON pointer: {row['assertion_id']}")
 
     task_cards = connection.execute(
         "SELECT card_id FROM card WHERE status = 'active' AND card_type = 'task' ORDER BY card_id"
@@ -574,13 +613,21 @@ def export_database(path: Path) -> dict[str, Any]:
             "source_references": ("card_source_reference", "card_id, target_id, reference"),
             "contract_bindings": ("card_contract_binding", "card_id, contract_id, version_constraint"),
             "knowledge_profiles": ("knowledge_profile", "card_id"),
+            "knowledge_assertions": ("knowledge_assertion", "card_id, assertion_id"),
             "task_directives": ("task_directive", "card_id, directive_kind, item_order"),
             "scenarios": ("scenario", "scenario_id"),
             "scenario_card_bindings": ("scenario_card_binding", "scenario_id, card_id, role"),
             "scenario_checker_bindings": ("scenario_checker_binding", "scenario_id, checker_id"),
         }
         for package_key, (table, order) in table_exports.items():
-            package[package_key] = [dict(row) for row in connection.execute(f"SELECT * FROM {table} ORDER BY {order}")]
+            exists = connection.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+            ).fetchone()[0]
+            package[package_key] = (
+                [dict(row) for row in connection.execute(f"SELECT * FROM {table} ORDER BY {order}")]
+                if exists
+                else []
+            )
         return package
     finally:
         connection.close()

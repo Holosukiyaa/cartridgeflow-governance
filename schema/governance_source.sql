@@ -1,5 +1,5 @@
 PRAGMA application_id = 1128681555;
-PRAGMA user_version = 3;
+PRAGMA user_version = 4;
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE registry_metadata (
@@ -147,6 +147,20 @@ CREATE TABLE knowledge_profile (
     CHECK (card_id <> floor_card_id)
 ) STRICT;
 
+CREATE TABLE knowledge_assertion (
+    assertion_id TEXT PRIMARY KEY,
+    card_id TEXT NOT NULL REFERENCES card(card_id) ON DELETE CASCADE,
+    target_id TEXT NOT NULL,
+    artifact_path TEXT NOT NULL,
+    assertion_kind TEXT NOT NULL CHECK (assertion_kind IN (
+        'artifact_exists', 'text_contains', 'json_pointer_equals'
+    )),
+    selector TEXT NOT NULL DEFAULT '',
+    expected_json TEXT NOT NULL CHECK (json_valid(expected_json)),
+    rationale TEXT NOT NULL,
+    UNIQUE (card_id, target_id, artifact_path, assertion_kind, selector, expected_json)
+) STRICT;
+
 CREATE TABLE task_directive (
     directive_id TEXT PRIMARY KEY,
     card_id TEXT NOT NULL REFERENCES card(card_id) ON DELETE CASCADE,
@@ -220,6 +234,7 @@ CREATE INDEX rule_card_idx ON rule(card_id, severity, rule_id);
 CREATE INDEX card_contract_idx ON card_contract_binding(target_id, contract_id, version_constraint);
 CREATE INDEX card_source_ref_idx ON card_source_reference(target_id, reference_kind, reference);
 CREATE INDEX card_example_card_idx ON card_example(card_id, example_kind);
+CREATE INDEX knowledge_assertion_card_idx ON knowledge_assertion(card_id, target_id, artifact_path);
 
 CREATE VIEW card_catalog AS
 SELECT card.card_id, card.card_type, card.title, card.summary, card.status,

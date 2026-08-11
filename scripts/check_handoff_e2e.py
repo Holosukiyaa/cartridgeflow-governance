@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import http.server
 import json
 import os
 import shutil
@@ -10,6 +12,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -96,9 +99,20 @@ def _manifest(flow_id: str, base: dict[str, Any]) -> dict[str, Any]:
             "runtime": {"type": "none", "adapter": "builtin:root_flow"},
             "permissions": [],
             "dependencies": [],
-            "mcp_tools": [],
+            "mcp_tools": [
+                {
+                    "id": "governance_lookup",
+                    "type": "local_resource",
+                    "server": "governance-resource",
+                    "tool": "resolve",
+                    "resource_role": "document_lookup",
+                    "contract": {"side_effect": "read_only", "idempotent": True, "timeout_ms": 5000},
+                }
+            ],
             "llm_recipe": {"schema": "cartridgeflow.llm_recipe.v1", "roles": []},
-            "resource_requirements": [],
+            "resource_requirements": [
+                {"role": "document_lookup", "kinds": ["remote_api"], "required": False}
+            ],
             "inputs": [
                 {
                     "id": "topic",
@@ -130,6 +144,8 @@ def _manifest(flow_id: str, base: dict[str, Any]) -> dict[str, Any]:
                 "required_permissions": [],
             },
             "root_flow": {"entry": "root.flow.json"},
+            "asset_registry": "assets/registry.json",
+            "interaction_components": "assets/components.json",
             "presentation": {
                 "settings": {
                     "contract": "contracts/settings.contract.json",
@@ -162,10 +178,25 @@ def _flow(flow_id: str) -> dict[str, Any]:
                 "outputs": {"topic": {"schema": {"type": "string"}, "target": {"type": "store", "key": "topic"}, "write_policy": "replace_revision"}},
                 "failure_policy": {"mode": "route", "terminal": "failed"},
             },
+            "lookup": {
+                "type": "process", "kind": "mcp_read", "executor": "mcp", "effect": "read_only",
+                "action": "tool_call", "title": "Lookup", "display_name": "Lookup",
+                "allowed_tools": ["governance_lookup"],
+                "mcp_binding": {"mode": "read_only", "allowed_tools": ["governance_lookup"]},
+                "inputs": {"topic": {"required": True, "schema": {"type": "string", "minLength": 1}, "binding": {"source": "run_input", "key": "topic"}}},
+                "outputs": {"brief": {"schema": {"type": "string", "minLength": 1}, "target": {"type": "store", "key": "brief"}, "write_policy": "replace_revision"}},
+                "tools": [{
+                    "server": "governance-resource", "tool": "resolve", "type": "remote_api",
+                    "output": "brief", "strict": True,
+                    "params": {"topic": "input:topic"},
+                    "contract": {"timeout_ms": 5000},
+                }],
+                "failure_policy": {"mode": "route", "terminal": "failed"},
+            },
             "publish": {
                 "type": "process", "kind": "delivery", "executor": "deterministic", "effect": "writes_store",
                 "action": "pass_result", "title": "Publish", "display_name": "Publish", "primary_output": "brief",
-                "inputs": {"brief": {"required": True, "schema": {"type": "string", "minLength": 1}, "binding": {"source": "store", "key": "topic"}}},
+                "inputs": {"brief": {"required": True, "schema": {"type": "string", "minLength": 1}, "binding": {"source": "store", "key": "brief"}}},
                 "outputs": {"brief": {"schema": {"type": "string", "minLength": 1}, "target": {"type": "store", "key": "brief"}, "write_policy": "replace_revision"}},
                 "params": {"length": "normal"},
                 "failure_policy": {"mode": "route", "terminal": "failed"},
@@ -179,10 +210,12 @@ def _flow(flow_id: str) -> dict[str, Any]:
             "entry": "start",
             "edges": [
                 {"id": "start-collect", "kind": "sequence", "from": "start", "to": "collect"},
-                {"id": "collect-publish", "kind": "sequence", "from": "collect", "to": "publish"},
+                {"id": "collect-lookup", "kind": "sequence", "from": "collect", "to": "lookup"},
+                {"id": "lookup-publish", "kind": "sequence", "from": "lookup", "to": "publish"},
                 {"id": "publish-delivery", "kind": "sequence", "from": "publish", "to": "delivery"},
                 {"id": "delivery-complete", "kind": "sequence", "from": "delivery", "to": "complete"},
                 {"id": "collect-failed", "kind": "failure", "from": "collect", "to": "failed", "failure": {"id": "collect-f", "causes": failures}},
+                {"id": "lookup-failed", "kind": "failure", "from": "lookup", "to": "failed", "failure": {"id": "lookup-f", "causes": failures}},
                 {"id": "publish-failed", "kind": "failure", "from": "publish", "to": "failed", "failure": {"id": "publish-f", "causes": failures}},
             ],
         },
@@ -215,8 +248,85 @@ def _presentation_contracts() -> tuple[dict[str, Any], dict[str, Any], dict[str,
             }
         ],
     }
-    ui = {"schema": "cartridgeflow.cartridge_ui.v1", "mode": "none", "host_capabilities": []}
+    ui = {
+        "schema": "cartridgeflow.cartridge_ui.v1",
+        "mode": "passive",
+        "component_id": "governance.home",
+        "host_capabilities": [],
+    }
     return settings, bindings, ui
+
+
+def _write_presentation_files(
+    package_path: Path,
+    settings: dict[str, Any],
+    bindings: dict[str, Any],
+    ui: dict[str, Any],
+) -> None:
+    html = b"<!doctype html><meta charset=utf-8><main data-governance-handoff>Governance handoff</main>"
+    assets = {
+        "schema": "cartridgeflow.asset_registry.v1",
+        "assets": [
+            {
+                "id": "governance.home.html",
+                "kind": "interaction_template",
+                "path": "assets/governance-home.html",
+                "media_type": "text/html",
+                "sha256": hashlib.sha256(html).hexdigest(),
+                "size": len(html),
+                "executable": False,
+            }
+        ],
+    }
+    components = {
+        "schema": "cartridgeflow.interaction_components.v1",
+        "components": [
+            {
+                "id": "governance.home",
+                "version": "1.0.0",
+                "runtime": "passive",
+                "entry": {"type": "asset", "ref": "asset:governance.home.html"},
+                "supported_modes": ["display"],
+                "input_schema": {"type": "object"},
+                "actions": [],
+                "host_capabilities": [],
+            }
+        ],
+    }
+    files: tuple[tuple[str, Any], ...] = (
+        ("contracts/settings.contract.json", settings),
+        ("contracts/ui.contract.json", ui),
+        ("settings/bindings.json", bindings),
+        ("assets/registry.json", assets),
+        ("assets/components.json", components),
+    )
+    for relative, value in files:
+        target = package_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    (package_path / "assets" / "governance-home.html").write_bytes(html)
+
+
+class _ResourceHandler(http.server.BaseHTTPRequestHandler):
+    def do_POST(self) -> None:
+        try:
+            length = int(self.headers.get("Content-Length") or "0")
+            payload = json.loads(self.rfile.read(length) or b"{}")
+            topic = str(payload.get("topic") or "")
+        except (ValueError, json.JSONDecodeError):
+            topic = ""
+        if not topic:
+            self.send_error(400)
+            return
+        body = topic.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, _format: str, *_args: Any) -> None:
+        return
 
 
 def _free_port() -> int:
@@ -246,6 +356,19 @@ def _http_json(method: str, url: str, payload: dict[str, Any] | None = None, *, 
     if not isinstance(value, dict):
         raise HandoffError(f"{method} {url} did not return an object")
     return value
+
+
+def _http_text(url: str, *, expect: int = 200) -> str:
+    try:
+        with urllib.request.urlopen(url, timeout=10) as response:
+            status = response.status
+            content = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+        content = exc.read().decode("utf-8")
+    if status != expect:
+        raise HandoffError(f"GET {url} returned HTTP {status}, expected {expect}: {content}")
+    return content
 
 
 def _wait_runtime(url: str, process: subprocess.Popen[Any]) -> None:
@@ -325,6 +448,12 @@ def main() -> int:
             client.post(f"/api/lab/flows/{flow_id}/tuning/releases/{release['id']}/activate"),
             "activate recipe release",
         )
+        cartridge = registry.get_packaging_cartridge(flow_id)
+        package_path = Path(str(cartridge.get("package_path") or ""))
+        if not package_path.is_dir():
+            raise HandoffError("workbench did not retain the temporary package directory")
+        settings, settings_bindings, ui = _presentation_contracts()
+        _write_presentation_files(package_path, settings, settings_bindings, ui)
         validation = _expect_response(client.post(f"/api/lab/flows/{flow_id}/validate", json={"files": {}}), "validate flow")
         compatibility = _expect_response(client.post(f"/api/lab/flows/{flow_id}/compatibility", json={"files": {}}), "check compatibility")
         if not validation.get("valid") or not compatibility.get("ok"):
@@ -336,19 +465,6 @@ def main() -> int:
         preflight = _expect_response(client.get(f"/api/studio/release/{flow_id}/preflight"), "release preflight")
         if not preflight.get("production_ready"):
             raise HandoffError(f"production preflight is blocked: {preflight.get('issues')}")
-        cartridge = registry.get_packaging_cartridge(flow_id)
-        package_path = Path(str(cartridge.get("package_path") or ""))
-        if not package_path.is_dir():
-            raise HandoffError("workbench did not retain the temporary package directory")
-        settings, settings_bindings, ui = _presentation_contracts()
-        for relative, value in (
-            ("contracts/settings.contract.json", settings),
-            ("contracts/ui.contract.json", ui),
-            ("settings/bindings.json", settings_bindings),
-        ):
-            target = package_path / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         release_inputs = release_archive_inputs(cartridge.get("manifest") or manifest)
         signing_identity = ensure_development_signing_identity(PRODUCT_ROOT, str(release_inputs["publisher_id"]))
         archive_path = Path(PRODUCT_ROOT) / PACKAGES_DIR / f"{flow_id}-0.0.1.cf-cre.zip"
@@ -444,6 +560,10 @@ def main() -> int:
                 or result_payload.get("plan_id") != installation_fact["plan_id"]
             ):
                 raise HandoffError(f"clean-v1 install handoff was incomplete: {install_probe_result}")
+            resource_server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _ResourceHandler)
+            resource_thread = threading.Thread(target=resource_server.serve_forever, daemon=True)
+            resource_thread.start()
+            resource_url = f"http://127.0.0.1:{resource_server.server_port}/resolve"
             port = _free_port()
             server = subprocess.Popen(
                 [str(shell), "serve", "--port", str(port), "--data-root", str(temp / "data")],
@@ -456,9 +576,36 @@ def main() -> int:
             runtime_url = f"http://127.0.0.1:{port}"
             try:
                 _wait_runtime(runtime_url, server)
+                runtime_settings = _http_json(
+                    "PUT",
+                    runtime_url + "/api/settings",
+                    {
+                        "resources": {
+                            "tools": [
+                                {
+                                    "id": "governance-local-lookup",
+                                    "role": "document_lookup",
+                                    "server": "governance-resource",
+                                    "kind": "remote_api",
+                                    "endpoint": resource_url,
+                                    "http_method": "POST",
+                                }
+                            ]
+                        }
+                    },
+                )
+                configured_tools = ((runtime_settings.get("resources") or {}).get("tools") or [])
+                if not any(item.get("id") == "governance-local-lookup" for item in configured_tools):
+                    raise HandoffError(f"DR did not persist the resource-role binding: {runtime_settings}")
                 declared = _http_json("GET", runtime_url + "/api/cartridge-settings")
                 if not declared.get("available") or declared.get("schema") != "cartridgeflow.cartridge_settings.v1":
                     raise HandoffError(f"DR did not expose CF-CRE@2 settings: {declared}")
+                declared_ui = declared.get("ui") or {}
+                if declared_ui.get("mode") != "passive" or declared_ui.get("component_id") != "governance.home":
+                    raise HandoffError(f"DR did not expose the declared passive UI: {declared_ui}")
+                home = _http_text(runtime_url + "/cartridge/")
+                if "data-governance-handoff" not in home:
+                    raise HandoffError("DR did not resolve the signed passive UI asset")
                 configured = _http_json(
                     "PUT",
                     runtime_url + "/api/cartridge-settings",
@@ -483,6 +630,9 @@ def main() -> int:
                 except subprocess.TimeoutExpired:
                     server.kill()
                     server.wait(timeout=5)
+                resource_server.shutdown()
+                resource_server.server_close()
+                resource_thread.join(timeout=5)
             delivery = completed.get("delivery") or {}
             if completed.get("status") != "completed" or delivery.get("status") != "produced" or delivery.get("value") != "governance-e2e":
                 raise HandoffError(f"DR happy path did not produce the expected delivery: {completed}")
@@ -543,6 +693,8 @@ def main() -> int:
                         "invalid_input_rejected": True,
                         "settings_contract_consumed": True,
                         "settings_value": "short",
+                        "passive_ui_resolved": True,
+                        "resource_role_resolved": True,
                         "delivery": delivery,
                         "tampered_package_rejected": True,
                     },

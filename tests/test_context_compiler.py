@@ -36,6 +36,48 @@ def _repository(path: Path, remote: str, files: dict[str, str]) -> None:
 
 
 class ContextCompilerTests(unittest.TestCase):
+    def test_conflicting_knowledge_assertion_expands_validation_to_target_floors(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.sqlite"
+            package = export_database(DEFAULT_DATABASE)
+            package["publication_id"] = "conflicting-knowledge-fact-test"
+            package["published_at"] = "2026-08-11T11:00:00Z"
+            assertion = next(
+                item for item in package["knowledge_assertions"]
+                if item["card_id"] == "knowledge.kernel-architecture"
+            )
+            assertion["assertion_kind"] = "text_contains"
+            assertion["expected_json"] = json.dumps(
+                "def this_reviewed_claim_does_not_exist(", ensure_ascii=False
+            )
+            build_database(package, source)
+            index = root / "index.sqlite"
+            build_index(source, DEFAULT_TARGETS, index)
+
+            failures = failing_findings(index, "warning")
+            self.assertTrue(
+                any(item["finding_type"] == "knowledge-fact-conflict" for item in failures),
+                failures,
+            )
+            context = compile_context(
+                source,
+                index,
+                ["cartridgeflow:src/core/cartridge/runner.py"],
+                targets_path=DEFAULT_TARGETS,
+            )
+            self.assertEqual("conservative", context["routing"]["state"])
+            self.assertEqual(["cartridgeflow"], context["routing"]["fallback_target_ids"])
+            self.assertTrue(
+                any(
+                    reason.startswith(
+                        "knowledge-conflict:knowledge.kernel-architecture:assertion.knowledge.kernel-architecture"
+                    )
+                    for reason in context["routing"]["fallback_reasons"]
+                ),
+                context["routing"],
+            )
+
     def test_stale_knowledge_expands_validation_to_target_floors(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

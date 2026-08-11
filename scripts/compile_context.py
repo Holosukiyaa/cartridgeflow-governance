@@ -366,23 +366,32 @@ def _knowledge_fallbacks(
     if not knowledge_ids:
         return [], set(), [], []
     statuses = [
-        dict(row)
+        {**dict(row), "signal_kind": "source", "signal_id": str(row["source_ref_id"])}
         for row in index.execute(
             f"SELECT * FROM knowledge_source_status WHERE status <> 'current' "
             f"AND card_id IN ({_placeholders(knowledge_ids)}) ORDER BY card_id, source_ref_id",
             tuple(knowledge_ids),
         )
     ]
+    statuses.extend(
+        {**dict(row), "signal_kind": "assertion", "signal_id": str(row["assertion_id"])}
+        for row in index.execute(
+            f"SELECT * FROM knowledge_assertion_status WHERE status <> 'current' "
+            f"AND card_id IN ({_placeholders(knowledge_ids)}) ORDER BY card_id, assertion_id",
+            tuple(knowledge_ids),
+        )
+    )
+    statuses.sort(key=lambda item: (str(item["card_id"]), str(item["signal_kind"]), str(item["signal_id"])))
     target_ids = {str(item["target_id"]) for item in statuses}
     reasons = [
-        f"knowledge-{item['status']}:{item['card_id']}:{item['source_ref_id']}"
+        f"knowledge-{item['status']}:{item['card_id']}:{item['signal_id']}"
         for item in statuses
     ]
     findings = [
         dict(row)
         for row in index.execute(
             f"SELECT finding.*, NULL AS target_id, NULL AS artifact_path FROM finding "
-            f"WHERE status = 'open' AND finding_type LIKE 'knowledge-source-%' "
+            f"WHERE status = 'open' AND finding_type LIKE 'knowledge-%' "
             f"AND card_id IN ({_placeholders(knowledge_ids)}) ORDER BY card_id, finding_id",
             tuple(knowledge_ids),
         )

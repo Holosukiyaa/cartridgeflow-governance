@@ -221,13 +221,15 @@ Ledger v2 可原位读取并迁移 v1 事件。迁移只增加事件结构和关
 
 索引命令现在只报告 `Static governance checks passed`。统一检查入口和浏览器分别展示 `static`、`floor`、`boundary`、`scenario` 和 `complete`；局部运行把未执行维度标为 `not-run`，只有无作用域的全量运行才计算完整验收。
 
-### 5.3 保守回退、合同反向路由和 Knowledge 来源漂移检测已实现
+### 5.3 保守回退、合同反向路由和 Knowledge 事实检测已实现
 
 无归属和歧义输入会进入 `routing.state=conservative`，上下文和检查范围扩大到候选目标楼层。公开合同输入按 `Contract Binding -> Boundary -> Producer + Consumer + Scenario` 反向展开，并有失败测试覆盖。治理源库检查始终运行。
 
 每个活跃 Knowledge 源码引用现在保存审核时的确定性 artifact 集合摘要。索引重建会把引用标为 `current`、`stale` 或 `unknown`；被选中的 Knowledge 一旦不是 current，路由就进入保守模式并扩大到对应目标的 Floor。`sync_knowledge_anchors.py` 是显式审核和发布动作，不允许扫描器自行接受新摘要。
 
-该机制检测的是来源集合和内容摘要漂移，不声称自动理解“Knowledge 自然语言正文是否与代码语义冲突”。自然语言语义冲突仍需代码审查、产品测试或专门的领域检查器暴露。
+每张 Knowledge 还必须声明至少一个人工审核的机器事实断言。当前受限判定只允许 `artifact_exists`、`text_contains` 和 `json_pointer_equals`，不执行卡片正文或卡片提供的命令。断言结果进入生成索引的 `knowledge_assertion_status`；`conflict` 产生 error，`unknown` 产生 warning，两者都会使被选中的卡片进入保守路由并扩大到目标 Floor。规则和检查器仍由 `constitution.project` 所有，Knowledge 保持描述性且不拥有治理规则。
+
+这不等于通用自然语言理解。来源锚负责发现“依据变了”，事实断言负责核验少量关键语义，其余正文仍需代码审查、产品测试或专门领域检查器证明。
 
 ### 5.4 产品正式验收已接入，并暴露当前协议锁 blocker
 
@@ -255,7 +257,9 @@ python scripts/audit_protocol_governance.py
 
 场景现在由真实 Workbench API 创建、保存、调优、验证和认证 Flow，再用现有产品 CF-CRE@2 构建器生成签名包。产品 clean Distribution 投影器从临时 v4 Registry 生成 installation request/plan，DR 的真实 Go Store 完成验签、物化和激活并返回 installation result；成功与篡改失败结果都由产品 clean Schema 反向验证。随后 DR 完成公开设置读取与保存、必需输入拒绝和成功交付，篡改失败不得改变活动卡带。
 
-当前 Workbench 包装 API 仍硬编码 CF-CRE@1，因此场景明确记录其实际打包入口为 `core.protocol.build_release_archive`，不伪称工作台包装 API 已支持 v2。clean Base 也仍是候选而非正式活动清单。工具资源解析和非空声明式 UI 的宿主投影仍是后续边界场景缺口。
+当前 Workbench 包装 API 仍硬编码 CF-CRE@1，因此场景明确记录其实际打包入口为 `core.protocol.build_release_archive`，不伪称工作台包装 API 已支持 v2。clean Base 也仍是候选而非正式活动清单。
+
+同一真实包现在携带非空被动 UI 资产和 `local_resource` 能力声明。DR 从安装后的包提供 UI，并把 `document_lookup` 资源角色解析到宿主注入的 `remote_api` 连接；流程实际调用临时 HTTP 资源并把返回值交付。清单能力来源、流程传输类型和宿主连接三层分别验证，不再用认证警告或 mock 结果代替运行证据。
 
 ### 5.7 责任路由核心失败路径和 Knowledge 来源漂移已有测试
 
@@ -266,10 +270,11 @@ python scripts/audit_protocol_governance.py
 - Ledger UPDATE/DELETE 被拒绝，索引重建不改写 Ledger；
 - 无关 Knowledge 变化只使真正依赖它的证据过期；
 - Knowledge 来源摘要失配会产生 warning、标记 stale，并把验证扩大到所属目标 Floor；
+- Knowledge 关键事实冲突会产生 error、标记 conflict，并把验证扩大到所属目标 Floor；
 - Knowledge 锚点同步是幂等的，旧 Ledger 事件迁移后仍保持原始摘要有效；
 - 产品正式验收适配器即使遇到首个失败仍执行全部入口。
 
-剩余缺口是自然语言语义冲突的领域检测，而不是来源漂移与保守回退。
+未结构化的自然语言正文仍不能由通用扫描器判真；新增领域必须先选择稳定关键事实，再增加受限断言或专门产品检查器。
 
 ### 5.8 权威发布和仓库状态尚不可复现
 
@@ -359,10 +364,10 @@ python scripts/audit_protocol_governance.py
 - 在精确足迹完成前保留全局摘要的保守失效；完成后将新鲜度收窄到真实依赖。
 - 保持 Knowledge 正文只描述当前状态，并继续禁止 Knowledge 进入 `card_revision`。
 
-### P1-5：补强 CF-CRE@2 与 clean-v1 真实边界（部分完成）
+### P1-5：补强 CF-CRE@2 与 clean-v1 真实边界（首个场景完成）
 
 - 已增加 CF-CRE@2 公共设置的工作台到 DR 场景，并覆盖 clean 安装 request/plan/result 的 Python-Go 等价性、成功和篡改失败。
-- 非空 UI 投影和工具资源仍待补充。
+- 已覆盖非空被动 UI 的宿主提供，以及 `local_resource` 角色到 `remote_api` 连接的实际解析和调用。
 - 为其他关键跨语言合同继续增加生产者/消费者等价性测试。
 - 明确每个 Boundary 的行为证据，而不仅是结构绑定。
 
@@ -379,14 +384,14 @@ python scripts/audit_protocol_governance.py
 - [x] 所有受治理文件具有唯一主要 Floor；
 - [x] 无归属和歧义能够触发保守回退；
 - [x] Knowledge 来源漂移可检测，并以代码事实优先扩大验证范围；
-- [ ] Knowledge 自然语言语义冲突具备对应领域检查器；
+- [x] Knowledge 的审核关键事实具备受限领域检查器、冲突诊断和保守回退；未结构化正文不伪称可自动判真；
 - [x] Knowledge 修改可向独立 Ledger 追加同步事件，卡片本身仍无历史；
 - [x] 产品正式验收入口不依赖卡片选择即可运行；
 - [x] 静态、楼层、边界、场景和完整验收状态分开展示；
 - [x] 产品协议锁失配会成为治理 blocker；
 - [x] CF-CRE@2 + clean-v1 安装真实交付场景通过；
 - [x] 当前治理测试全部通过；
-- [ ] 一次 AI 修改可完整回溯到路由、差异、检查计划、检查结果和知识同步事件；
+- [x] 一次 AI 修改可完整回溯到路由、差异、检查计划、检查结果和知识同步事件；
 - [x] 无关 Knowledge 变化不会使其他自治区域的精确证据失效。
 
 ## 10. 本文不解决的事项

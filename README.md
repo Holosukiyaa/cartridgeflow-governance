@@ -114,9 +114,14 @@ Every active Knowledge source reference carries a reviewed deterministic
 artifact-set digest. The generated index reports it as `current`, `stale`, or
 `unknown`. A selected stale or unknown Knowledge card cannot narrow work: the
 compiler enters conservative mode and adds the affected target floors. This is
-source-drift detection, not a claim that tooling understands whether natural
-language prose is semantically true. `sync_knowledge_anchors.py` is the explicit
-review-and-publish operation; each changed card appends a separate Ledger event.
+source-drift detection, not a claim that tooling understands arbitrary natural
+language. Each Knowledge card also carries at least one reviewed, restricted
+machine assertion (`artifact_exists`, `text_contains`, or
+`json_pointer_equals`). A conflict or indeterminate result produces a finding
+and the same conservative expansion. Assertions never execute card-provided
+commands and their rule remains owned by the global constitution.
+`sync_knowledge_anchors.py` is the explicit review-and-publish operation; each
+changed card appends a separate Ledger event.
 
 ```powershell
 python scripts/compile_context.py `
