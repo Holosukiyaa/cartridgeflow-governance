@@ -1,0 +1,46 @@
+{
+  "schema": "cartridgeflow.governance.targets.v1",
+  "targets": [
+    {
+      "id": "cartridgeflow",
+      "role": "product-and-workbench",
+      "path": "../CartridgeFlow",
+      "remote": "https://github.com/Holosukiyaa/CartridgeFlow.git",
+      "governed_roots": [
+        "src",
+        "config/protocol/protocol-registry.sqlite"
+      ],
+      "contract_registry": "config/protocol/protocol-registry.sqlite",
+      "validate_authority_references": true,
+      "python_roots": [
+        "src"
+      ],
+      "typescript_packages": [
+        "src/intent-studio",
+        "src/capability-workshop"
+      ],
+      "runtime_roots": [
+        "src",
+        "scripts"
+      ]
+    },
+    {
+      "id": "desktop-runner",
+      "role": "runtime-shell",
+      "path": "../CartridgeFlow/DR",
+      "remote": "https://github.com/Holosukiyaa/cartridgeflow-runtime-shell.git",
+      "governed_roots": [
+        "shell"
+      ],
+      "validate_authority_references": true,
+      "python_roots": [],
+      "typescript_packages": [],
+      "go_modules": [
+        "shell/go"
+      ],
+      "runtime_roots": [
+        "shell"
+      ]
+    }
+  ]
+}
