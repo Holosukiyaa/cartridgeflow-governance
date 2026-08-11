@@ -329,6 +329,67 @@ def _select_card_ids(
     return selected, scenarios
 
 
+def _add_conservative_floor_cards(
+    source: sqlite3.Connection,
+    selected: dict[str, set[str]],
+    target_ids: set[str],
+) -> None:
+    for target_id in sorted(target_ids):
+        for (card_id,) in source.execute(
+            "SELECT DISTINCT card.card_id FROM card "
+            "JOIN card_scope AS scope ON scope.card_id = card.card_id "
+            "WHERE card.status = 'active' AND card.card_type = 'floor' "
+            "AND scope.target_id = ? ORDER BY card.card_id",
+            (target_id,),
+        ):
+            selected.setdefault(str(card_id), set()).add(
+                f"conservative-target-fallback:{target_id}"
+            )
+
+
+def _knowledge_fallbacks(
+    source: sqlite3.Connection,
+    index: sqlite3.Connection,
+    selected: dict[str, set[str]],
+) -> tuple[list[dict[str, Any]], set[str], list[str], list[dict[str, Any]]]:
+    selected_ids = sorted(selected)
+    if not selected_ids:
+        return [], set(), [], []
+    knowledge_ids = [
+        str(row[0])
+        for row in source.execute(
+            f"SELECT card_id FROM card WHERE card_type = 'knowledge' "
+            f"AND card_id IN ({_placeholders(selected_ids)}) ORDER BY card_id",
+            tuple(selected_ids),
+        )
+    ]
+    if not knowledge_ids:
+        return [], set(), [], []
+    statuses = [
+        dict(row)
+        for row in index.execute(
+            f"SELECT * FROM knowledge_source_status WHERE status <> 'current' "
+            f"AND card_id IN ({_placeholders(knowledge_ids)}) ORDER BY card_id, source_ref_id",
+            tuple(knowledge_ids),
+        )
+    ]
+    target_ids = {str(item["target_id"]) for item in statuses}
+    reasons = [
+        f"knowledge-{item['status']}:{item['card_id']}:{item['source_ref_id']}"
+        for item in statuses
+    ]
+    findings = [
+        dict(row)
+        for row in index.execute(
+            f"SELECT finding.*, NULL AS target_id, NULL AS artifact_path FROM finding "
+            f"WHERE status = 'open' AND finding_type LIKE 'knowledge-source-%' "
+            f"AND card_id IN ({_placeholders(knowledge_ids)}) ORDER BY card_id, finding_id",
+            tuple(knowledge_ids),
+        )
+    ]
+    return statuses, target_ids, reasons, findings
+
+
 def _card_payload(source: sqlite3.Connection, selected: dict[str, set[str]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     card_ids = sorted(selected)
     placeholders = _placeholders(card_ids)
@@ -457,10 +518,23 @@ def compile_context(
             conservative_target_ids=conservative_target_ids,
             contracts=contracts,
         )
+        knowledge_sources, knowledge_target_ids, knowledge_reasons, knowledge_findings = _knowledge_fallbacks(
+            source, index, selected
+        )
+        if knowledge_target_ids:
+            conservative_target_ids.update(knowledge_target_ids)
+            fallback_reasons = sorted(set(fallback_reasons) | set(knowledge_reasons))
+            _add_conservative_floor_cards(source, selected, knowledge_target_ids)
+            existing_finding_ids = {str(item["finding_id"]) for item in findings}
+            findings.extend(
+                item for item in knowledge_findings
+                if str(item["finding_id"]) not in existing_finding_ids
+            )
         cards, relations = _card_payload(source, selected)
         target_ids = sorted(
             {str(item["target_id"]) for item in artifacts}
             | {str(item["target_id"]) for item in contracts}
+            | conservative_target_ids
         )
         targets = [
             dict(row)
@@ -498,6 +572,7 @@ def compile_context(
             "relations": relations,
             "contracts": contracts,
             "scenarios": scenarios,
+            "knowledge_sources": knowledge_sources,
             "routing": {
                 "state": "conservative" if fallback_reasons else "precise",
                 "fallback_reasons": fallback_reasons,

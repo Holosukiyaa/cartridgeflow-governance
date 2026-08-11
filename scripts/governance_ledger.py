@@ -22,7 +22,10 @@ except ImportError:  # Direct execution: python scripts/governance_ledger.py
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_LEDGER = ROOT / "governance-ledger.sqlite"
 SCHEMA_PATH = ROOT / "schema" / "governance_ledger.sql"
-LEDGER_SCHEMA = "cartridgeflow.governance.ledger.v1"
+LEDGER_SCHEMA = "cartridgeflow.governance.ledger.v2"
+LEGACY_LEDGER_SCHEMA = "cartridgeflow.governance.ledger.v1"
+KNOWLEDGE_SYNC_V1 = "cartridgeflow.governance.knowledge-sync.v1"
+KNOWLEDGE_SYNC_V2 = "cartridgeflow.governance.knowledge-sync.v2"
 
 
 class GovernanceLedgerError(RuntimeError):
@@ -33,9 +36,21 @@ def digest_payload(payload: Any) -> str:
     return hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
 
 
+def knowledge_snapshot_digest(card_content_digest: str, source_refs: list[dict[str, Any]]) -> str:
+    return digest_payload(
+        {"card_content_digest": card_content_digest, "source_refs": source_refs}
+    )
+
+
 def initialize_ledger(path: Path = DEFAULT_LEDGER) -> None:
     path = path.resolve()
     if path.exists():
+        metadata = _ledger_metadata(path)
+        if metadata.get("schema") == LEGACY_LEDGER_SCHEMA and metadata.get("schema_version") == "1":
+            legacy_errors = _verify_ledger(path, legacy=True)
+            if legacy_errors:
+                raise GovernanceLedgerError("existing legacy ledger is invalid:\n- " + "\n- ".join(legacy_errors))
+            _migrate_v1_to_v2(path)
         errors = verify_ledger(path)
         if errors:
             raise GovernanceLedgerError("existing ledger is invalid:\n- " + "\n- ".join(errors))
@@ -49,7 +64,7 @@ def initialize_ledger(path: Path = DEFAULT_LEDGER) -> None:
         connection.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
         metadata = {
             "schema": LEDGER_SCHEMA,
-            "schema_version": "1",
+            "schema_version": "2",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "event_policy": "append-only",
         }
@@ -62,10 +77,47 @@ def initialize_ledger(path: Path = DEFAULT_LEDGER) -> None:
         raise
 
 
-def verify_ledger(path: Path = DEFAULT_LEDGER) -> list[str]:
+def _ledger_metadata(path: Path) -> dict[str, str]:
+    try:
+        connection = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+        try:
+            return dict(connection.execute("SELECT key, value FROM ledger_metadata"))
+        finally:
+            connection.close()
+    except sqlite3.Error:
+        return {}
+
+
+def _knowledge_sync_payload(row: sqlite3.Row, *, legacy: bool) -> dict[str, Any]:
+    payload = {
+        "actor": row["actor"],
+        "after_digest": row["after_digest"],
+        "before_digest": row["before_digest"],
+        "card_id": row["card_id"],
+        "floor_card_id": row["floor_card_id"],
+        "occurred_at": row["occurred_at"],
+        "reason": row["reason"],
+        "source_refs": json.loads(str(row["source_refs_json"])),
+    }
+    if not legacy:
+        payload.update(
+            {
+                "changed_paths": json.loads(str(row["changed_paths_json"])),
+                "event_schema": row["event_schema"],
+                "route_run_id": row["route_run_id"],
+                "trigger_kind": row["trigger_kind"],
+                "trigger_reference": row["trigger_reference"],
+                "verification_run_ids": json.loads(str(row["verification_run_ids_json"])),
+            }
+        )
+    return payload
+
+
+def _verify_ledger(path: Path, *, legacy: bool) -> list[str]:
     if not path.is_file():
         return [f"ledger does not exist: {path}"]
     connection = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+    connection.row_factory = sqlite3.Row
     errors: list[str] = []
     try:
         integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
@@ -74,10 +126,15 @@ def verify_ledger(path: Path = DEFAULT_LEDGER) -> list[str]:
         if connection.execute("PRAGMA foreign_key_check").fetchall():
             errors.append("SQLite foreign key check failed")
         metadata = dict(connection.execute("SELECT key, value FROM ledger_metadata"))
-        if metadata.get("schema") != LEDGER_SCHEMA:
-            errors.append(f"ledger schema must be {LEDGER_SCHEMA}")
-        if metadata.get("schema_version") != "1":
-            errors.append("ledger schema_version must be 1")
+        expected_schema = LEGACY_LEDGER_SCHEMA if legacy else LEDGER_SCHEMA
+        expected_version = "1" if legacy else "2"
+        user_version = connection.execute("PRAGMA user_version").fetchone()[0]
+        if metadata.get("schema") != expected_schema:
+            errors.append(f"ledger schema must be {expected_schema}")
+        if metadata.get("schema_version") != expected_version:
+            errors.append(f"ledger schema_version must be {expected_version}")
+        if user_version != int(expected_version):
+            errors.append(f"ledger user_version must be {expected_version}")
         if metadata.get("event_policy") != "append-only":
             errors.append("ledger event policy must be append-only")
         for table, id_column in (
@@ -98,27 +155,78 @@ def verify_ledger(path: Path = DEFAULT_LEDGER) -> list[str]:
                 if table != "knowledge_sync_event" and digest_payload(payload) != str(content_digest):
                     errors.append(f"content digest mismatch: {table}:{row_id}")
         for row in connection.execute("SELECT * FROM knowledge_sync_event ORDER BY event_id"):
-            (
-                event_id, occurred_at, card_id, floor_card_id, reason, before_digest,
-                after_digest, actor, source_refs_json, content_digest,
-            ) = row
-            payload = {
-                "actor": actor,
-                "after_digest": after_digest,
-                "before_digest": before_digest,
-                "card_id": card_id,
-                "floor_card_id": floor_card_id,
-                "occurred_at": occurred_at,
-                "reason": reason,
-                "source_refs": json.loads(str(source_refs_json)),
-            }
-            if digest_payload(payload) != str(content_digest):
-                errors.append(f"content digest mismatch: knowledge_sync_event:{event_id}")
+            event_legacy = legacy or row["event_schema"] == KNOWLEDGE_SYNC_V1
+            if not legacy and row["event_schema"] not in {KNOWLEDGE_SYNC_V1, KNOWLEDGE_SYNC_V2}:
+                errors.append(f"unknown event schema: knowledge_sync_event:{row['event_id']}")
+                continue
+            payload = _knowledge_sync_payload(row, legacy=event_legacy)
+            if digest_payload(payload) != str(row["content_digest"]):
+                errors.append(f"content digest mismatch: knowledge_sync_event:{row['event_id']}")
     except sqlite3.Error as exc:
         errors.append(f"cannot inspect ledger: {exc}")
     finally:
         connection.close()
     return errors
+
+
+def verify_ledger(path: Path = DEFAULT_LEDGER) -> list[str]:
+    return _verify_ledger(path, legacy=False)
+
+
+def _migrate_v1_to_v2(path: Path) -> None:
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute("DROP TRIGGER knowledge_sync_no_update")
+        connection.execute("DROP TRIGGER knowledge_sync_no_delete")
+        connection.execute("DROP INDEX knowledge_sync_card_idx")
+        connection.execute("ALTER TABLE knowledge_sync_event RENAME TO knowledge_sync_event_v1")
+        connection.execute(
+            "CREATE TABLE knowledge_sync_event ("
+            "event_id TEXT PRIMARY KEY, "
+            "event_schema TEXT NOT NULL CHECK (event_schema IN ("
+            f"'{KNOWLEDGE_SYNC_V1}', '{KNOWLEDGE_SYNC_V2}'"
+            ")), "
+            "occurred_at TEXT NOT NULL, card_id TEXT NOT NULL, floor_card_id TEXT NOT NULL, "
+            "reason TEXT NOT NULL, before_digest TEXT, after_digest TEXT NOT NULL, actor TEXT NOT NULL, "
+            "source_refs_json TEXT NOT NULL CHECK (json_valid(source_refs_json)), "
+            "trigger_kind TEXT NOT NULL, trigger_reference TEXT NOT NULL, "
+            "changed_paths_json TEXT NOT NULL CHECK (json_valid(changed_paths_json)), "
+            "verification_run_ids_json TEXT NOT NULL CHECK (json_valid(verification_run_ids_json)), "
+            "route_run_id TEXT REFERENCES route_run(route_run_id), content_digest TEXT NOT NULL"
+            ") STRICT"
+        )
+        connection.execute(
+            "INSERT INTO knowledge_sync_event ("
+            "event_id, event_schema, occurred_at, card_id, floor_card_id, reason, before_digest, "
+            "after_digest, actor, source_refs_json, trigger_kind, trigger_reference, changed_paths_json, "
+            "verification_run_ids_json, route_run_id, content_digest"
+            ") SELECT event_id, ?, occurred_at, card_id, floor_card_id, reason, before_digest, "
+            "after_digest, actor, source_refs_json, 'legacy', '', '[]', '[]', NULL, content_digest "
+            "FROM knowledge_sync_event_v1",
+            (KNOWLEDGE_SYNC_V1,),
+        )
+        connection.execute("DROP TABLE knowledge_sync_event_v1")
+        connection.execute(
+            "CREATE INDEX knowledge_sync_card_idx ON knowledge_sync_event(card_id, occurred_at)"
+        )
+        connection.execute(
+            "CREATE TRIGGER knowledge_sync_no_update BEFORE UPDATE ON knowledge_sync_event "
+            "BEGIN SELECT RAISE(ABORT, 'ledger is append-only'); END"
+        )
+        connection.execute(
+            "CREATE TRIGGER knowledge_sync_no_delete BEFORE DELETE ON knowledge_sync_event "
+            "BEGIN SELECT RAISE(ABORT, 'ledger is append-only'); END"
+        )
+        connection.execute("UPDATE ledger_metadata SET value = ? WHERE key = 'schema'", (LEDGER_SCHEMA,))
+        connection.execute("UPDATE ledger_metadata SET value = '2' WHERE key = 'schema_version'")
+        connection.execute("PRAGMA user_version = 2")
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def _row_digest(row: sqlite3.Row | dict[str, Any]) -> str:
@@ -248,6 +356,11 @@ def record_knowledge_sync(
     reason: str,
     actor: str,
     before_digest: str | None,
+    trigger_kind: str = "manual",
+    trigger_reference: str = "direct",
+    changed_paths: list[str] | None = None,
+    verification_run_ids: list[str] | None = None,
+    route_run_id: str | None = None,
 ) -> str:
     source_errors = verify_database(source_path)
     if source_errors:
@@ -266,17 +379,23 @@ def record_knowledge_sync(
         source_refs = [
             dict(row)
             for row in source.execute(
-                "SELECT target_id, reference_kind, reference, purpose FROM card_source_reference "
+                "SELECT target_id, reference_kind, reference, purpose, anchor_algorithm, anchor_digest "
+                "FROM card_source_reference "
                 "WHERE card_id = ? ORDER BY source_ref_id",
                 (card_id,),
             )
         ]
         floor_card_id = str(card["floor_card_id"])
-        after_digest = str(card["content_digest"])
+        card_content_digest = str(card["content_digest"])
     finally:
         source.close()
 
     initialize_ledger(ledger_path)
+    changed_paths = sorted(set(changed_paths or []))
+    verification_run_ids = sorted(set(verification_run_ids or []))
+    if not trigger_kind.strip() or not trigger_reference.strip():
+        raise GovernanceLedgerError("knowledge sync trigger kind and reference must be non-empty")
+    after_digest = knowledge_snapshot_digest(card_content_digest, source_refs)
     event_id = str(uuid.uuid4())
     occurred_at = datetime.now(timezone.utc).isoformat()
     payload = {
@@ -284,17 +403,28 @@ def record_knowledge_sync(
         "after_digest": after_digest,
         "before_digest": before_digest,
         "card_id": card_id,
+        "changed_paths": changed_paths,
+        "event_schema": KNOWLEDGE_SYNC_V2,
         "floor_card_id": floor_card_id,
         "occurred_at": occurred_at,
         "reason": reason,
+        "route_run_id": route_run_id,
         "source_refs": source_refs,
+        "trigger_kind": trigger_kind,
+        "trigger_reference": trigger_reference,
+        "verification_run_ids": verification_run_ids,
     }
     connection = sqlite3.connect(ledger_path)
     try:
         connection.execute(
-            "INSERT INTO knowledge_sync_event VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO knowledge_sync_event ("
+            "event_id, event_schema, occurred_at, card_id, floor_card_id, reason, before_digest, "
+            "after_digest, actor, source_refs_json, trigger_kind, trigger_reference, changed_paths_json, "
+            "verification_run_ids_json, route_run_id, content_digest"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 event_id,
+                KNOWLEDGE_SYNC_V2,
                 occurred_at,
                 card_id,
                 floor_card_id,
@@ -303,6 +433,11 @@ def record_knowledge_sync(
                 after_digest,
                 actor,
                 canonical_json(source_refs),
+                trigger_kind,
+                trigger_reference,
+                canonical_json(changed_paths),
+                canonical_json(verification_run_ids),
+                route_run_id,
                 digest_payload(payload),
             ),
         )
@@ -330,6 +465,11 @@ def main() -> int:
     sync.add_argument("--reason", required=True)
     sync.add_argument("--actor", default="codex")
     sync.add_argument("--before-digest")
+    sync.add_argument("--trigger-kind", default="manual")
+    sync.add_argument("--trigger-reference", default="direct-cli")
+    sync.add_argument("--changed-path", action="append", default=[])
+    sync.add_argument("--verification-run-id", action="append", default=[])
+    sync.add_argument("--route-run-id")
     args = parser.parse_args()
     ledger = args.ledger.resolve()
     try:
@@ -351,6 +491,11 @@ def main() -> int:
                 reason=args.reason,
                 actor=args.actor,
                 before_digest=args.before_digest,
+                trigger_kind=args.trigger_kind,
+                trigger_reference=args.trigger_reference,
+                changed_paths=args.changed_path,
+                verification_run_ids=args.verification_run_id,
+                route_run_id=args.route_run_id,
             )
             print(f"Recorded knowledge sync event: {event_id}")
             return 0

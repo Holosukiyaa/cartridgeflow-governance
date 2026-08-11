@@ -197,28 +197,37 @@ Ledger 不成为产品依赖，也不成为卡片正文来源。AI 的默认施�
 知识同步事件保存：
 
 ```text
-knowledge_sync_event_id
+event_id
+event_schema
 card_id
-previous_digest
-content_digest
+floor_card_id
+before_digest
+after_digest
+source_refs
 trigger_kind
 trigger_reference
 changed_paths
 verification_run_ids
 route_run_id
-published_at
-change_summary
+occurred_at
+reason
+actor
+content_digest
 ```
+
+Ledger v2 可原位读取并迁移 v1 事件。迁移只增加事件结构和关联字段，不重写既有事件的内容摘要；新旧事件按各自的事件 schema 独立验签。
 
 ### 5.2 五种验收状态已拆分
 
 索引命令现在只报告 `Static governance checks passed`。统一检查入口和浏览器分别展示 `static`、`floor`、`boundary`、`scenario` 和 `complete`；局部运行把未执行维度标为 `not-run`，只有无作用域的全量运行才计算完整验收。
 
-### 5.3 保守回退与合同反向路由已实现，Knowledge 冲突仍待补齐
+### 5.3 保守回退、合同反向路由和 Knowledge 来源漂移检测已实现
 
 无归属和歧义输入会进入 `routing.state=conservative`，上下文和检查范围扩大到候选目标楼层。公开合同输入按 `Contract Binding -> Boundary -> Producer + Consumer + Scenario` 反向展开，并有失败测试覆盖。治理源库检查始终运行。
 
-尚未完成的是自动识别“Knowledge 正文与当前代码事实冲突”。在该检测器落地前，Knowledge 冲突仍需由代码审查或目标测试暴露，不能据此声称所有不确定性来源都已自动扩大范围。
+每个活跃 Knowledge 源码引用现在保存审核时的确定性 artifact 集合摘要。索引重建会把引用标为 `current`、`stale` 或 `unknown`；被选中的 Knowledge 一旦不是 current，路由就进入保守模式并扩大到对应目标的 Floor。`sync_knowledge_anchors.py` 是显式审核和发布动作，不允许扫描器自行接受新摘要。
+
+该机制检测的是来源集合和内容摘要漂移，不声称自动理解“Knowledge 自然语言正文是否与代码语义冲突”。自然语言语义冲突仍需代码审查、产品测试或专门的领域检查器暴露。
 
 ### 5.4 产品正式验收已接入，并暴露当前协议锁 blocker
 
@@ -248,7 +257,7 @@ python scripts/audit_protocol_governance.py
 
 当前 Workbench 包装 API 仍硬编码 CF-CRE@1，因此场景明确记录其实际打包入口为 `core.protocol.build_release_archive`，不伪称工作台包装 API 已支持 v2。工具资源解析和非空声明式 UI 的宿主投影仍是后续边界场景缺口。
 
-### 5.7 责任路由核心失败路径已有测试，Knowledge 冲突仍缺测试
+### 5.7 责任路由核心失败路径和 Knowledge 来源漂移已有测试
 
 治理测试已经覆盖：
 
@@ -256,13 +265,15 @@ python scripts/audit_protocol_governance.py
 - 公开合同反向展开 Boundary、生产者、消费者和 Scenario；
 - Ledger UPDATE/DELETE 被拒绝，索引重建不改写 Ledger；
 - 无关 Knowledge 变化只使真正依赖它的证据过期；
+- Knowledge 来源摘要失配会产生 warning、标记 stale，并把验证扩大到所属目标 Floor；
+- Knowledge 锚点同步是幂等的，旧 Ledger 事件迁移后仍保持原始摘要有效；
 - 产品正式验收适配器即使遇到首个失败仍执行全部入口。
 
-剩余缺口是 Knowledge 与代码事实冲突的自动检测及其失败测试。
+剩余缺口是自然语言语义冲突的领域检测，而不是来源漂移与保守回退。
 
 ### 5.8 权威发布和仓库状态尚不可复现
 
-当前治理仓库没有首个 Git 提交。CartridgeFlow、协议源和 DR 也存在大量只在本地的提交或工作区变化，DR 还是 CartridgeFlow 目录中的未跟踪嵌套仓库。
+治理仓库已建立首个可审阅 Git 基线。CartridgeFlow 和 DR 仍存在工作区变化，DR 还是 CartridgeFlow 目录中的未跟踪嵌套仓库；这些目标仓库状态不能由治理数据库替代。
 
 数据库摘要可以证明某个文件内容没有变化，但不能替代代码、检查器、目标配置和数据库发布物的可审阅 Git 历史。
 
@@ -335,11 +346,11 @@ python scripts/audit_protocol_governance.py
 - 修改索引 CLI 的通过措辞，禁止把静态无 finding 表述为完整通过。
 - 完整验收只聚合当前且满足依赖足迹的下层证据。
 
-### P0-3：实现保守回退与合同反向路由（核心完成）
+### P0-3：实现保守回退与合同反向路由（已完成）
 
-- 已为无归属和歧义扩大候选楼层或目标仓库检查；Knowledge 冲突自动检测仍待补齐。
+- 已为无归属、歧义和 Knowledge 来源漂移扩大候选楼层或目标仓库检查。
 - 实现 `Contract Binding -> Boundary -> Producer + Consumer + Scenario`。
-- 为检查选择、回退策略和公开合同闭包增加失败测试。
+- 为检查选择、回退策略、Knowledge 来源漂移和公开合同闭包增加失败测试。
 
 ### P0-4：增加独立 Ledger 与精确证据足迹（已完成）
 
@@ -366,7 +377,8 @@ python scripts/audit_protocol_governance.py
 
 - [x] 所有受治理文件具有唯一主要 Floor；
 - [x] 无归属和歧义能够触发保守回退；
-- [ ] Knowledge 冲突可检测，并以代码事实优先；
+- [x] Knowledge 来源漂移可检测，并以代码事实优先扩大验证范围；
+- [ ] Knowledge 自然语言语义冲突具备对应领域检查器；
 - [x] Knowledge 修改可向独立 Ledger 追加同步事件，卡片本身仍无历史；
 - [x] 产品正式验收入口不依赖卡片选择即可运行；
 - [x] 静态、楼层、边界、场景和完整验收状态分开展示；

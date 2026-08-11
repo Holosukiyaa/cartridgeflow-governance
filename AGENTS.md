@@ -29,7 +29,9 @@ sync events belong in the append-only `governance-ledger.sqlite`.
 - Knowledge cards are reusable, floor-scoped current knowledge. They never carry
   revisions, timelines, work logs, normative rules, or checker bindings. Each
   knowledge card explains exactly one floor and should be loaded only when its
-  exact scope is relevant to the task.
+  exact scope is relevant to the task. Every active Knowledge source reference
+  has a reviewed artifact-set anchor. A stale or unresolved anchor must widen
+  validation to the affected target floors until explicitly synchronized.
 - The browser is read-only and consumes published SQLite snapshots.
 - Product protocol databases are targets or references, never this repository's
   storage backend.
@@ -45,6 +47,8 @@ python scripts/governance_db.py
 python scripts/check_detachability.py
 python scripts/build_governance_index.py build
 python scripts/build_governance_index.py
+python scripts/sync_knowledge_anchors.py
+python scripts/governance_ledger.py verify
 python scripts/run_governance_checks.py --changed
 python scripts/check_handoff_e2e.py
 python scripts/check_removability.py

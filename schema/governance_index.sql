@@ -1,5 +1,5 @@
 PRAGMA application_id = 1128681556;
-PRAGMA user_version = 3;
+PRAGMA user_version = 4;
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE registry_metadata (
@@ -102,6 +102,21 @@ CREATE TABLE card_contract_match (
     details_json TEXT NOT NULL CHECK (json_valid(details_json))
 ) STRICT;
 
+CREATE TABLE knowledge_source_status (
+    source_ref_id TEXT PRIMARY KEY,
+    card_id TEXT NOT NULL,
+    floor_card_id TEXT NOT NULL,
+    target_id TEXT NOT NULL REFERENCES target_revision(target_id) ON DELETE CASCADE,
+    reference_kind TEXT NOT NULL,
+    reference TEXT NOT NULL,
+    anchor_algorithm TEXT,
+    expected_digest TEXT,
+    observed_digest TEXT,
+    matched_artifact_count INTEGER NOT NULL CHECK (matched_artifact_count >= 0),
+    status TEXT NOT NULL CHECK (status IN ('current', 'stale', 'unknown')),
+    details_json TEXT NOT NULL CHECK (json_valid(details_json))
+) STRICT;
+
 CREATE TABLE context_chunk (
     chunk_id TEXT PRIMARY KEY,
     card_id TEXT NOT NULL,
@@ -137,6 +152,8 @@ CREATE INDEX symbol_name_idx ON observed_symbol(qualified_name, symbol_kind);
 CREATE INDEX contract_identity_idx ON observed_contract(target_id, contract_id, version);
 CREATE INDEX contract_usage_idx ON observed_contract_usage(contract_key, direction, actor);
 CREATE INDEX contract_match_card_idx ON card_contract_match(card_id, match_status);
+CREATE INDEX knowledge_source_card_idx ON knowledge_source_status(card_id, status, source_ref_id);
+CREATE INDEX knowledge_source_target_idx ON knowledge_source_status(target_id, status, source_ref_id);
 CREATE INDEX context_chunk_card_idx ON context_chunk(card_id, source_kind, source_id);
 
 CREATE VIEW coverage_catalog AS
@@ -184,3 +201,15 @@ SELECT contract.*, match.binding_id, match.card_id, match.match_status,
        match.details_json AS binding_details_json
 FROM observed_contract AS contract
 LEFT JOIN card_contract_match AS match ON match.contract_key = contract.contract_key;
+
+CREATE VIEW knowledge_status AS
+SELECT card_id, floor_card_id,
+       CASE
+         WHEN SUM(CASE WHEN status = 'unknown' THEN 1 ELSE 0 END) > 0 THEN 'unknown'
+         WHEN SUM(CASE WHEN status = 'stale' THEN 1 ELSE 0 END) > 0 THEN 'stale'
+         ELSE 'current'
+       END AS status,
+       COUNT(*) AS source_reference_count,
+       SUM(matched_artifact_count) AS matched_artifact_count
+FROM knowledge_source_status
+GROUP BY card_id, floor_card_id;

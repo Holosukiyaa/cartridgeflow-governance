@@ -13,9 +13,10 @@ from scripts.build_governance_index import (
     DEFAULT_TARGETS,
     _governance_facts_digest,
     build_index,
+    failing_findings,
 )
 from scripts.compile_context import compile_context
-from scripts.governance_db import DEFAULT_DATABASE
+from scripts.governance_db import DEFAULT_DATABASE, build_database, export_database
 
 
 def _repository(path: Path, remote: str, files: dict[str, str]) -> None:
@@ -35,6 +36,52 @@ def _repository(path: Path, remote: str, files: dict[str, str]) -> None:
 
 
 class ContextCompilerTests(unittest.TestCase):
+    def test_stale_knowledge_expands_validation_to_target_floors(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.sqlite"
+            package = export_database(DEFAULT_DATABASE)
+            package["publication_id"] = "stale-knowledge-test"
+            package["published_at"] = "2026-08-11T10:00:00Z"
+            reference = next(
+                item for item in package["source_references"]
+                if item["card_id"] == "knowledge.kernel-architecture"
+            )
+            reference["anchor_digest"] = "0" * 64
+            build_database(package, source)
+            index = root / "index.sqlite"
+            build_index(source, DEFAULT_TARGETS, index)
+
+            failures = failing_findings(index, "warning")
+            self.assertTrue(
+                any(item["finding_type"] == "knowledge-source-stale" for item in failures),
+                failures,
+            )
+            context = compile_context(
+                source,
+                index,
+                ["cartridgeflow:src/core/cartridge/runner.py"],
+                targets_path=DEFAULT_TARGETS,
+            )
+            floors = {
+                item["card_id"] for item in context["cards"] if item["card_type"] == "floor"
+            }
+            self.assertEqual(
+                {
+                    "floor.kernel-v060",
+                    "floor.workbench-v070",
+                    "floor.intent-studio-v070",
+                    "floor.capability-workshop-v070",
+                },
+                floors,
+            )
+            self.assertEqual("conservative", context["routing"]["state"])
+            self.assertEqual(["cartridgeflow"], context["routing"]["fallback_target_ids"])
+            self.assertTrue(
+                any(reason.startswith("knowledge-stale:knowledge.kernel-architecture:") for reason in context["routing"]["fallback_reasons"]),
+                context["routing"],
+            )
+
     def test_unowned_artifact_expands_validation_to_target_floors(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             index = Path(directory) / "index.sqlite"

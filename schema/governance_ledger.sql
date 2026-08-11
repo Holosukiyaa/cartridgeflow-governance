@@ -1,5 +1,5 @@
 PRAGMA application_id = 1128681557;
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE ledger_metadata (
@@ -97,6 +97,10 @@ CREATE TABLE acceptance_result (
 
 CREATE TABLE knowledge_sync_event (
     event_id TEXT PRIMARY KEY,
+    event_schema TEXT NOT NULL CHECK (event_schema IN (
+        'cartridgeflow.governance.knowledge-sync.v1',
+        'cartridgeflow.governance.knowledge-sync.v2'
+    )),
     occurred_at TEXT NOT NULL,
     card_id TEXT NOT NULL,
     floor_card_id TEXT NOT NULL,
@@ -105,6 +109,11 @@ CREATE TABLE knowledge_sync_event (
     after_digest TEXT NOT NULL,
     actor TEXT NOT NULL,
     source_refs_json TEXT NOT NULL CHECK (json_valid(source_refs_json)),
+    trigger_kind TEXT NOT NULL,
+    trigger_reference TEXT NOT NULL,
+    changed_paths_json TEXT NOT NULL CHECK (json_valid(changed_paths_json)),
+    verification_run_ids_json TEXT NOT NULL CHECK (json_valid(verification_run_ids_json)),
+    route_run_id TEXT REFERENCES route_run(route_run_id),
     content_digest TEXT NOT NULL
 ) STRICT;
 

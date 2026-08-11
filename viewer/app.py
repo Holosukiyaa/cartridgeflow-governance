@@ -129,6 +129,10 @@ def _summary(source_path: Path, index_path: Path, ledger_path: Path, targets_pat
         "GROUP BY dependency_kind, resolution_status ORDER BY dependency_kind, resolution_status",
     )
     targets = _rows(index_path, "SELECT * FROM target_revision ORDER BY target_id")
+    knowledge_sources = _rows(
+        index_path,
+        "SELECT status, COUNT(*) AS count FROM knowledge_status GROUP BY status ORDER BY status",
+    )
     checks = _check_runs(source_path, index_path, ledger_path, targets_path, limit=6)
     acceptance = _rows(
         ledger_path,
@@ -146,6 +150,7 @@ def _summary(source_path: Path, index_path: Path, ledger_path: Path, targets_pat
         "findings": findings,
         "dependencies": dependencies,
         "targets": targets,
+        "knowledge_sources": knowledge_sources,
         "checks": checks,
         "acceptance": acceptance,
     }
@@ -252,6 +257,14 @@ def create_app(
             ) + '</div>'
             for item in summary["acceptance"]
         ) + '</section>'
+        knowledge_counts = {str(item["status"]): int(item["count"]) for item in summary["knowledge_sources"]}
+        knowledge_strip = (
+            '<section class="acceptance-strip" aria-label="Knowledge 状态">'
+            '<div><span>Knowledge 当前</span>' + _badge(str(knowledge_counts.get("current", 0)), "ok") + '</div>'
+            '<div><span>Knowledge 漂移</span>' + _badge(str(knowledge_counts.get("stale", 0)), "danger" if knowledge_counts.get("stale", 0) else "neutral") + '</div>'
+            '<div><span>Knowledge 未知</span>' + _badge(str(knowledge_counts.get("unknown", 0)), "warning" if knowledge_counts.get("unknown", 0) else "neutral") + '</div>'
+            '</section>'
+        )
         targets = _table(
             ["目标", "角色", "提交", "状态", "文件"],
             [
@@ -319,6 +332,7 @@ def create_app(
             _page_header("治理总览", f"事实摘要 {facts_digest[:16]} · 扫描器 {summary['index_metadata'].get('scanner_version', '')}")
             + metrics
             + acceptance_strip
+            + knowledge_strip
             + '<section class="content-section"><div class="section-heading"><h2>目标快照</h2></div>'
             + targets
             + '</section><section class="content-section"><div class="section-heading"><h2>最近检测</h2><a href="/checks">查看全部</a></div>'
@@ -508,6 +522,10 @@ def create_app(
             search_error = str(exc)
         else:
             search_error = ""
+        knowledge_states = {
+            str(item["card_id"]): str(item["status"])
+            for item in _rows(app.state.index_path, "SELECT card_id, status FROM knowledge_status")
+        }
         form = f"""<form class="filter-bar" method="get">
           <input type="search" name="q" value="{_e(q)}" placeholder="卡片 ID、标题或正文" aria-label="搜索卡片">
           <select name="mode" aria-label="搜索方式"><option value="fts"{' selected' if mode == 'fts' else ''}>全文</option><option value="exact"{' selected' if mode == 'exact' else ''}>精确</option></select>
@@ -519,13 +537,17 @@ def create_app(
         </form>"""
         error = f'<div class="inline-alert danger">{_e(search_error)}</div>' if search_error else ""
         table = _table(
-            ["卡片", "类型", "摘要", "修订", "作用域", "规则"],
+            ["卡片", "类型", "摘要", "修订", "知识状态", "作用域", "规则"],
             [
                 [
                     f'<a href="/cards/{quote(str(item["card_id"]), safe="")}"><code>{_e(item["card_id"])}</code><br>{_e(item["title"])}</a>',
                     _badge(str(item["card_type"]), "accent"),
                     _e(item["summary"]),
                     _e(item["revision"]) if item["revision"] is not None else _badge("当前内容 · 无历史", "ok"),
+                    _badge(
+                        knowledge_states.get(str(item["card_id"]), "-"),
+                        "ok" if knowledge_states.get(str(item["card_id"])) == "current" else "warning",
+                    ) if item["card_type"] == "knowledge" else "-",
                     _e(item["scope_count"]),
                     _e(item["rule_count"]),
                 ]
@@ -600,6 +622,21 @@ def create_app(
             "SELECT * FROM card_source_reference WHERE card_id = ? ORDER BY target_id, reference",
             (card_id,),
         )
+        knowledge_source_status = {
+            str(item["source_ref_id"]): item
+            for item in _rows(
+                app.state.index_path,
+                "SELECT * FROM knowledge_source_status WHERE card_id = ? ORDER BY source_ref_id",
+                (card_id,),
+            )
+        }
+        for source_reference in source_references:
+            source_reference["anchor_status"] = knowledge_source_status.get(
+                str(source_reference["source_ref_id"]), {}
+            ).get("status")
+            source_reference["observed_digest"] = knowledge_source_status.get(
+                str(source_reference["source_ref_id"]), {}
+            ).get("observed_digest")
         contract_bindings = _rows(
             app.state.source_path,
             "SELECT * FROM card_contract_binding WHERE card_id = ? "
@@ -719,8 +756,19 @@ def create_app(
             [[_badge(str(item["evidence_kind"])), _e(item["statement"])] for item in evidence_requirements],
         )
         source_table = _table(
-            ["目标", "类型", "来源", "用途"],
-            [[_e(item["target_id"]), _badge(str(item["reference_kind"])), f'<code>{_e(item["reference"])}</code>', _e(item["purpose"])] for item in source_references],
+            ["目标", "类型", "来源", "状态", "审核摘要", "当前摘要", "用途"],
+            [[
+                _e(item["target_id"]),
+                _badge(str(item["reference_kind"])),
+                f'<code>{_e(item["reference"])}</code>',
+                _badge(
+                    str(item["anchor_status"] or "未锚定"),
+                    "ok" if item["anchor_status"] == "current" else "warning",
+                ),
+                f'<code>{_e(str(item["anchor_digest"] or "-")[:16])}</code>',
+                f'<code>{_e(str(item["observed_digest"] or "-")[:16])}</code>',
+                _e(item["purpose"]),
+            ] for item in source_references],
         )
         contract_table = _table(
             ["合同", "版本", "角色", "分类", "匹配"],
@@ -752,9 +800,10 @@ def create_app(
         profile_section = ""
         if knowledge_profile:
             profile = knowledge_profile[0]
+            profile_status = next(iter(knowledge_source_status.values()), {}).get("status", "unknown")
             profile_section = (
                 '<section class="content-section knowledge-profile"><div class="section-heading"><h2>知识卡定位</h2>'
-                '<span>当前可复用知识 · 无修订历史</span></div>'
+                '<span>当前可复用知识 · 无修订历史 · ' + _e(str(profile_status)) + '</span></div>'
                 f'<dl class="fact-grid"><div><dt>解释楼层</dt><dd><a href="/cards/{quote(str(profile["floor_card_id"]), safe="")}">{_e(profile["floor_card_id"])}</a></dd></div>'
                 f'<div><dt>读者</dt><dd>{_e(profile["audience"])}</dd></div>'
                 f'<div><dt>适用范围</dt><dd>{_e(profile["applicability"])}</dd></div>'

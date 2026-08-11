@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 import json
+import copy
 import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.governance_db import build_database, export_database, verify_database
+from scripts.governance_db import GovernanceDatabaseError, build_database, export_database, verify_database
 
 
 def publication() -> dict:
     package = {
-        "schema": "cartridgeflow.governance.card-publication.v2",
+        "schema": "cartridgeflow.governance.card-publication.v3",
         "publication_id": "test-publication",
         "published_at": "2026-08-11T00:00:00Z",
         "cards": [
@@ -395,6 +396,8 @@ class GovernanceDatabaseTests(unittest.TestCase):
                 "reference_kind": "path",
                 "reference": "producer/fixture.py",
                 "purpose": "Current implementation anchor.",
+                "anchor_algorithm": "artifact-set-sha256-v1",
+                "anchor_digest": "a" * 64,
             }
         )
         package["relations"].append(
@@ -423,6 +426,16 @@ class GovernanceDatabaseTests(unittest.TestCase):
             exported = export_database(database)
             self.assertIsNone(next(card for card in exported["cards"] if card["card_id"] == "knowledge.producer")["revision"])
             self.assertFalse(any(item["card_id"] == "knowledge.producer" for item in exported["card_revisions"]))
+
+            unanchored = copy.deepcopy(package)
+            source_reference = next(
+                item for item in unanchored["source_references"]
+                if item["card_id"] == "knowledge.producer"
+            )
+            source_reference["anchor_algorithm"] = None
+            source_reference["anchor_digest"] = None
+            with self.assertRaisesRegex(GovernanceDatabaseError, "lacks a reviewed anchor"):
+                build_database(unanchored, Path(directory) / "unanchored.sqlite")
 
             package["rules"].append(
                 {

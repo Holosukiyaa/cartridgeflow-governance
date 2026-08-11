@@ -12,6 +12,7 @@
       ],
       "contract_registry": "config/protocol/protocol-registry.sqlite",
       "validate_authority_references": true,
+      "validate_knowledge_anchors": true,
       "python_roots": [
         "src"
       ],
@@ -33,6 +34,7 @@
         "shell"
       ],
       "validate_authority_references": true,
+      "validate_knowledge_anchors": true,
       "python_roots": [],
       "typescript_packages": [],
       "go_modules": [

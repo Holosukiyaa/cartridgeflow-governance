@@ -120,6 +120,7 @@ class CheckOrchestratorTests(unittest.TestCase):
                 {
                     "constitution.dependency-declared": "passed",
                     "constitution.dependency-observable": "passed",
+                    "constitution.knowledge-source-current": "passed",
                     "constitution.references-exist": "passed",
                     "constitution.scope-primary-owner": "failed",
                 },

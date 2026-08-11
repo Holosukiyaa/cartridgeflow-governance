@@ -26,8 +26,8 @@ delivery behavior.
 - `governance-source.sqlite`: reviewed cards, scopes, relations, rules,
   checker bindings, and scenarios. This is the authoritative governance source.
 - `.data/governance-index.sqlite`: generated source observations, coverage,
-  symbols, product contracts, findings, and deterministic context chunks. It
-  can be discarded and rebuilt.
+  symbols, product contracts, Knowledge source-anchor state, findings, and
+  deterministic context chunks. It can be discarded and rebuilt.
 - `governance-ledger.sqlite`: append-only routing runs, check plans and results,
   five-state acceptance snapshots, exact evidence footprints, diagnostics, and
   `knowledge_sync_event` records. Index rebuilds never remove Ledger events.
@@ -54,6 +54,7 @@ python -m pip install -r requirements-scanner.txt
 python scripts/build_governance_index.py build
 python scripts/build_governance_index.py check
 python scripts/build_governance_index.py summary
+python scripts/sync_knowledge_anchors.py
 python scripts/governance_ledger.py init
 python scripts/governance_ledger.py verify
 python scripts/governance_ledger.py freshness --index .data/governance-index.sqlite --targets targets.json
@@ -106,6 +107,14 @@ An uncovered or ambiguous artifact produces `routing.state=conservative` and
 expands validation to the affected target. A public contract routes through its
 exact Contract Binding to the Boundary, then proactively expands its producer,
 consumer, and bound scenario.
+
+Every active Knowledge source reference carries a reviewed deterministic
+artifact-set digest. The generated index reports it as `current`, `stale`, or
+`unknown`. A selected stale or unknown Knowledge card cannot narrow work: the
+compiler enters conservative mode and adds the affected target floors. This is
+source-drift detection, not a claim that tooling understands whether natural
+language prose is semantically true. `sync_knowledge_anchors.py` is the explicit
+review-and-publish operation; each changed card appends a separate Ledger event.
 
 ```powershell
 python scripts/compile_context.py `

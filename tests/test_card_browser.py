@@ -70,9 +70,18 @@ class CardBrowserTests(unittest.TestCase):
     def test_knowledge_card_has_current_content_without_history(self) -> None:
         response = self.client.get("/cards/knowledge.kernel-architecture")
         self.assertEqual(200, response.status_code)
-        self.assertIn("当前可复用知识 · 无修订历史", response.text)
+        self.assertIn("当前可复用知识 · 无修订历史 · current", response.text)
         self.assertIn("此卡只表达当前可复用知识，不保存历史", response.text)
+        self.assertIn("审核摘要", response.text)
+        self.assertIn("当前摘要", response.text)
         self.assertNotIn("rNone", response.text)
+
+    def test_dashboard_shows_knowledge_anchor_state(self) -> None:
+        response = self.client.get("/")
+        self.assertEqual(200, response.status_code)
+        self.assertIn('aria-label="Knowledge 状态"', response.text)
+        self.assertIn("Knowledge 当前", response.text)
+        self.assertIn('badge badge-ok">9</span>', response.text)
 
     def test_card_filters_and_global_contract_classification(self) -> None:
         response = self.client.get(

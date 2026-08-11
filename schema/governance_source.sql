@@ -1,5 +1,5 @@
 PRAGMA application_id = 1128681555;
-PRAGMA user_version = 2;
+PRAGMA user_version = 3;
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE registry_metadata (
@@ -119,6 +119,9 @@ CREATE TABLE card_source_reference (
     reference_kind TEXT NOT NULL CHECK (reference_kind IN ('path', 'symbol', 'api', 'artifact')),
     reference TEXT NOT NULL,
     purpose TEXT NOT NULL,
+    anchor_algorithm TEXT CHECK (anchor_algorithm IS NULL OR anchor_algorithm = 'artifact-set-sha256-v1'),
+    anchor_digest TEXT CHECK (anchor_digest IS NULL OR length(anchor_digest) = 64),
+    CHECK ((anchor_algorithm IS NULL) = (anchor_digest IS NULL)),
     UNIQUE (card_id, target_id, reference_kind, reference)
 ) STRICT;
 

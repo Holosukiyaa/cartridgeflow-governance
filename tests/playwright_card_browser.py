@@ -36,6 +36,9 @@ def main() -> None:
         desktop.wait_for_load_state("networkidle")
         desktop.get_by_role("heading", name="治理总览").wait_for()
         assert desktop.get_by_text("阻断诊断").is_visible()
+        knowledge_status = desktop.get_by_label("Knowledge 状态")
+        assert knowledge_status.get_by_text("Knowledge 当前", exact=True).is_visible()
+        assert knowledge_status.get_by_text("9", exact=True).is_visible()
         acceptance = desktop.get_by_label("验收状态")
         assert "static" not in acceptance.inner_text().lower()
         for label in ("静态", "楼层", "边界", "场景", "完整"):
@@ -81,7 +84,7 @@ def main() -> None:
         desktop.goto(BASE_URL + "/cards/knowledge.kernel-architecture")
         desktop.wait_for_load_state("networkidle")
         desktop.get_by_role("heading", name="Base 内核导航").wait_for()
-        assert desktop.get_by_text("当前可复用知识 · 无修订历史", exact=True).is_visible()
+        assert desktop.get_by_text("当前可复用知识 · 无修订历史 · current", exact=True).is_visible()
         assert desktop.get_by_text("此卡只表达当前可复用知识，不保存历史", exact=False).is_visible()
         assert "rNone" not in desktop.content()
         _assert_no_page_overflow(desktop)

@@ -15,8 +15,8 @@ from typing import Any, Iterable
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATABASE = ROOT / "governance-source.sqlite"
 SCHEMA_PATH = ROOT / "schema" / "governance_source.sql"
-PUBLICATION_SCHEMA = "cartridgeflow.governance.card-publication.v2"
-DATABASE_SCHEMA = "cartridgeflow.governance.cards.v2"
+PUBLICATION_SCHEMA = "cartridgeflow.governance.card-publication.v3"
+DATABASE_SCHEMA = "cartridgeflow.governance.cards.v3"
 
 
 class GovernanceDatabaseError(RuntimeError):
@@ -160,7 +160,10 @@ def _insert_rows(connection: sqlite3.Connection, package: dict[str, Any]) -> Non
         ),
         "source_references": (
             "card_source_reference",
-            ("source_ref_id", "card_id", "target_id", "reference_kind", "reference", "purpose"),
+            (
+                "source_ref_id", "card_id", "target_id", "reference_kind", "reference", "purpose",
+                "anchor_algorithm", "anchor_digest",
+            ),
         ),
         "contract_bindings": (
             "card_contract_binding",
@@ -195,6 +198,12 @@ def _insert_rows(connection: sqlite3.Connection, package: dict[str, Any]) -> Non
         for item in package.get(package_key, []):
             if package_key == "card_sections" and "content_digest" not in item:
                 item = {**item, "content_digest": hashlib.sha256(item["content"].encode("utf-8")).hexdigest()}
+            if package_key == "source_references":
+                item = {
+                    **item,
+                    "anchor_algorithm": item.get("anchor_algorithm"),
+                    "anchor_digest": item.get("anchor_digest"),
+                }
             _required(item, fields, package_key)
             connection.execute(
                 f"INSERT INTO {table} ({', '.join(fields)}) VALUES ({placeholders})",
@@ -218,7 +227,7 @@ def build_database(package: dict[str, Any], target: Path) -> None:
         connection.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
         metadata = {
             "schema": DATABASE_SCHEMA,
-            "schema_version": "2",
+            "schema_version": "3",
             "publication_id": str(package["publication_id"]),
             "published_at": str(package["published_at"]),
             "publication_digest": digest_json(package),
@@ -287,8 +296,8 @@ def verify_connection(connection: sqlite3.Connection, *, root: Path | None = Non
     metadata = dict(connection.execute("SELECT key, value FROM registry_metadata"))
     if metadata.get("schema") != DATABASE_SCHEMA:
         errors.append(f"registry schema must be {DATABASE_SCHEMA}")
-    if metadata.get("schema_version") != "2":
-        errors.append("registry schema_version must be 2")
+    if metadata.get("schema_version") != "3":
+        errors.append("registry schema_version must be 3")
     if metadata.get("embedding_policy") != "deferred-advisory-only":
         errors.append("embedding policy must remain deferred and advisory-only")
 
@@ -401,6 +410,26 @@ def verify_connection(connection: sqlite3.Connection, *, root: Path | None = Non
             errors.append(f"knowledge card must explain exactly one floor: {card_id}:{explains}")
         if connection.execute("SELECT COUNT(*) FROM rule WHERE card_id = ?", (card_id,)).fetchone()[0]:
             errors.append(f"knowledge card must not own normative rules: {card_id}")
+        unanchored = connection.execute(
+            "SELECT source_ref_id, anchor_algorithm, anchor_digest FROM card_source_reference "
+            "WHERE card_id = ? AND (anchor_algorithm IS NULL OR anchor_digest IS NULL) "
+            "ORDER BY source_ref_id",
+            (card_id,),
+        ).fetchall()
+        errors.extend(
+            f"knowledge source reference lacks a reviewed anchor: {card_id}:{row[0]}"
+            for row in unanchored
+        )
+        invalid_anchors = connection.execute(
+            "SELECT source_ref_id, anchor_digest FROM card_source_reference "
+            "WHERE card_id = ? AND anchor_digest IS NOT NULL ORDER BY source_ref_id",
+            (card_id,),
+        ).fetchall()
+        for source_ref_id, anchor_digest in invalid_anchors:
+            if any(character not in "0123456789abcdef" for character in str(anchor_digest)):
+                errors.append(
+                    f"knowledge source reference anchor is not lowercase SHA-256: {card_id}:{source_ref_id}"
+                )
 
     task_cards = connection.execute(
         "SELECT card_id FROM card WHERE status = 'active' AND card_type = 'task' ORDER BY card_id"

@@ -28,8 +28,8 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_TARGETS = ROOT / "targets.json"
 DEFAULT_INDEX = ROOT / ".data" / "governance-index.sqlite"
 INDEX_SCHEMA = ROOT / "schema" / "governance_index.sql"
-INDEX_DATABASE_SCHEMA = "cartridgeflow.governance.index.v3"
-SCANNER_VERSION = "0.5.0"
+INDEX_DATABASE_SCHEMA = "cartridgeflow.governance.index.v4"
+SCANNER_VERSION = "0.6.0"
 SEVERITY_RANK = {"info": 0, "warning": 1, "error": 2, "blocker": 3}
 TYPESCRIPT_EXTRACTOR = ROOT / "scripts" / "extract_typescript_imports.mjs"
 TYPESCRIPT_SUFFIXES = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
@@ -173,6 +173,10 @@ def _governance_facts_digest(connection: sqlite3.Connection) -> str:
         ).fetchall(),
         "contract_matches": connection.execute(
             "SELECT binding_id, card_id, contract_key, match_status FROM card_contract_match ORDER BY binding_id"
+        ).fetchall(),
+        "knowledge_sources": connection.execute(
+            "SELECT source_ref_id, card_id, expected_digest, observed_digest, status "
+            "FROM knowledge_source_status ORDER BY source_ref_id"
         ).fetchall(),
         "context_chunks": connection.execute(
             "SELECT chunk_id, card_id, source_kind, source_id, content_digest FROM context_chunk ORDER BY chunk_id"
@@ -1209,6 +1213,146 @@ def _check_source_references(
         )
 
 
+def knowledge_anchor_digest(artifacts: list[dict[str, str]]) -> str:
+    """Digest an exact, ordered set of source artifacts used by one Knowledge reference."""
+    payload = [
+        {
+            "artifact_path": str(item["artifact_path"]),
+            "content_digest": str(item["content_digest"]),
+        }
+        for item in sorted(artifacts, key=lambda item: str(item["artifact_path"]))
+    ]
+    return hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
+
+
+def knowledge_anchor_observation(
+    connection: sqlite3.Connection,
+    *,
+    target_id: str,
+    reference_kind: str,
+    reference: str,
+) -> tuple[str | None, list[dict[str, str]]]:
+    normalized = reference.replace("\\", "/").strip("/")
+    rows: list[sqlite3.Row]
+    if reference_kind == "symbol":
+        rows = connection.execute(
+            "SELECT DISTINCT artifact.artifact_path, artifact.content_digest "
+            "FROM observed_symbol AS symbol JOIN observed_artifact AS artifact "
+            "ON artifact.artifact_id = symbol.artifact_id "
+            "WHERE symbol.target_id = ? AND symbol.qualified_name = ? ORDER BY artifact.artifact_path",
+            (target_id, reference),
+        ).fetchall()
+    elif reference_kind in {"artifact", "api"}:
+        rows = connection.execute(
+            "SELECT artifact_path, content_digest FROM observed_artifact "
+            "WHERE target_id = ? AND artifact_path = ? ORDER BY artifact_path",
+            (target_id, normalized),
+        ).fetchall()
+    else:
+        candidates = connection.execute(
+            "SELECT artifact_path, content_digest FROM observed_artifact "
+            "WHERE target_id = ? ORDER BY artifact_path",
+            (target_id,),
+        ).fetchall()
+        prefix = normalized + "/"
+        rows = [
+            row for row in candidates
+            if str(row["artifact_path"]) == normalized or str(row["artifact_path"]).startswith(prefix)
+        ]
+    artifacts = [
+        {"artifact_path": str(row["artifact_path"]), "content_digest": str(row["content_digest"])}
+        for row in rows
+    ]
+    return (knowledge_anchor_digest(artifacts), artifacts) if artifacts else (None, [])
+
+
+def _insert_knowledge_source_status(
+    connection: sqlite3.Connection,
+    source: Path,
+    config: dict[str, Any],
+) -> None:
+    enabled_targets = {
+        str(item["id"])
+        for item in config.get("targets", [])
+        if item.get("validate_knowledge_anchors", False)
+    }
+    if not enabled_targets:
+        return
+    source_connection = sqlite3.connect(f"{source.resolve().as_uri()}?mode=ro", uri=True)
+    source_connection.row_factory = sqlite3.Row
+    try:
+        references = source_connection.execute(
+            "SELECT reference.*, profile.floor_card_id FROM card_source_reference AS reference "
+            "JOIN card ON card.card_id = reference.card_id "
+            "JOIN knowledge_profile AS profile ON profile.card_id = reference.card_id "
+            "WHERE card.status = 'active' AND card.card_type = 'knowledge' "
+            "ORDER BY reference.source_ref_id"
+        ).fetchall()
+    finally:
+        source_connection.close()
+    for row in references:
+        item = dict(row)
+        target_id = str(item["target_id"])
+        if target_id not in enabled_targets:
+            continue
+        observed_digest, artifacts = knowledge_anchor_observation(
+            connection,
+            target_id=target_id,
+            reference_kind=str(item["reference_kind"]),
+            reference=str(item["reference"]),
+        )
+        expected_digest = str(item["anchor_digest"]) if item["anchor_digest"] else None
+        if observed_digest is None or expected_digest is None:
+            status = "unknown"
+        elif observed_digest == expected_digest:
+            status = "current"
+        else:
+            status = "stale"
+        details = {
+            "anchor_algorithm": item["anchor_algorithm"],
+            "expected_digest": expected_digest,
+            "matched_artifact_paths": [artifact["artifact_path"] for artifact in artifacts],
+            "observed_digest": observed_digest,
+            "reference": item["reference"],
+            "reference_kind": item["reference_kind"],
+            "target_id": target_id,
+        }
+        connection.execute(
+            "INSERT INTO knowledge_source_status VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                item["source_ref_id"], item["card_id"], item["floor_card_id"], target_id,
+                item["reference_kind"], item["reference"], item["anchor_algorithm"],
+                expected_digest, observed_digest, len(artifacts), status, canonical_json(details),
+            ),
+        )
+        if status == "current":
+            continue
+        finding_id = hashlib.sha256(
+            f"knowledge-source:{item['source_ref_id']}:{status}".encode("utf-8")
+        ).hexdigest()
+        connection.execute(
+            "INSERT INTO finding VALUES (?, 'warning', ?, 'constitution.knowledge-source-current', "
+            "?, ?, ?, ?, 'open')",
+            (
+                finding_id,
+                f"knowledge-source-{status}",
+                item["card_id"],
+                None,
+                f"Knowledge source is {status}: {target_id}:{item['reference']}",
+                canonical_json(
+                    {
+                        "reason": "Knowledge source anchor no longer proves the current explanation",
+                        "expected": expected_digest or "reviewed source anchor",
+                        "actual": observed_digest or "source reference did not resolve to governed artifacts",
+                        "boundary_card_id": None,
+                        "floor_card_id": item["floor_card_id"],
+                        **details,
+                    }
+                ),
+            ),
+        )
+
+
 def build_index(source: Path, targets_path: Path, target: Path) -> None:
     source_errors = verify_source_database(source)
     if source_errors:
@@ -1227,10 +1371,11 @@ def build_index(source: Path, targets_path: Path, target: Path) -> None:
     connection: sqlite3.Connection | None = None
     try:
         connection = sqlite3.connect(temporary)
+        connection.row_factory = sqlite3.Row
         connection.executescript(INDEX_SCHEMA.read_text(encoding="utf-8"))
         metadata = {
             "schema": INDEX_DATABASE_SCHEMA,
-            "schema_version": "3",
+            "schema_version": "4",
             "scanner_version": SCANNER_VERSION,
             "card_source_publication_id": source_identity["publication_id"],
             "card_source_publication_digest": source_identity["publication_digest"],
@@ -1240,6 +1385,9 @@ def build_index(source: Path, targets_path: Path, target: Path) -> None:
             ) else "0",
             "contract_scanning_required": "1" if any(
                 item.get("contract_registry") for item in config.get("targets", [])
+            ) else "0",
+            "knowledge_anchor_scanning_required": "1" if any(
+                item.get("validate_knowledge_anchors", False) for item in config.get("targets", [])
             ) else "0",
         }
         for key, value in sorted(metadata.items()):
@@ -1254,6 +1402,7 @@ def build_index(source: Path, targets_path: Path, target: Path) -> None:
             ))
         _insert_observed_contracts(connection, source, config)
         _check_source_references(connection, source, config)
+        _insert_knowledge_source_status(connection, source, config)
         _insert_context_chunks(connection, source)
         connection.execute(
             "INSERT INTO registry_metadata VALUES ('parser_versions', ?)",
@@ -1281,8 +1430,8 @@ def build_index(source: Path, targets_path: Path, target: Path) -> None:
 
 def verify_index_connection(connection: sqlite3.Connection) -> list[str]:
     errors: list[str] = []
-    if connection.execute("PRAGMA user_version").fetchone()[0] != 3:
-        errors.append("index SQLite user_version must be 3")
+    if connection.execute("PRAGMA user_version").fetchone()[0] != 4:
+        errors.append("index SQLite user_version must be 4")
     if connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
         errors.append("SQLite integrity check failed")
     if connection.execute("PRAGMA foreign_key_check").fetchall():
@@ -1290,8 +1439,8 @@ def verify_index_connection(connection: sqlite3.Connection) -> list[str]:
     metadata = dict(connection.execute("SELECT key, value FROM registry_metadata"))
     if metadata.get("schema") != INDEX_DATABASE_SCHEMA:
         errors.append(f"index schema must be {INDEX_DATABASE_SCHEMA}")
-    if metadata.get("schema_version") != "3":
-        errors.append("index schema_version must be 3")
+    if metadata.get("schema_version") != "4":
+        errors.append("index schema_version must be 4")
     if metadata.get("scanner_version") != SCANNER_VERSION:
         errors.append(f"index scanner_version must be {SCANNER_VERSION}")
     try:
@@ -1316,6 +1465,10 @@ def verify_index_connection(connection: sqlite3.Connection) -> list[str]:
     contracts = connection.execute("SELECT COUNT(*) FROM observed_contract").fetchone()[0]
     if metadata.get("contract_scanning_required") == "1" and contracts == 0:
         errors.append("index must contain observed product contracts")
+    if metadata.get("knowledge_anchor_scanning_required") == "1" and connection.execute(
+        "SELECT COUNT(*) FROM knowledge_source_status"
+    ).fetchone()[0] == 0:
+        errors.append("index must contain Knowledge source status facts")
     unmatched_contracts = connection.execute(
         "SELECT COUNT(*) FROM observed_contract AS contract WHERE NOT EXISTS ("
         "SELECT 1 FROM card_contract_match AS match WHERE match.contract_key = contract.contract_key "
@@ -1436,6 +1589,13 @@ def index_summary(path: Path) -> dict[str, Any]:
                 for row in connection.execute(
                     "SELECT generation, lifecycle, COUNT(*) AS count FROM observed_contract "
                     "GROUP BY generation, lifecycle ORDER BY generation, lifecycle"
+                )
+            ],
+            "knowledge_sources": [
+                dict(row)
+                for row in connection.execute(
+                    "SELECT status, COUNT(*) AS count, SUM(matched_artifact_count) AS artifact_count "
+                    "FROM knowledge_source_status GROUP BY status ORDER BY status"
                 )
             ],
             "findings": [
