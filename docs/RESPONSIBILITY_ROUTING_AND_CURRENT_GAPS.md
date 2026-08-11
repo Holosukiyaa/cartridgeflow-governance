@@ -231,7 +231,7 @@ Ledger v2 可原位读取并迁移 v1 事件。迁移只增加事件结构和关
 
 这不等于通用自然语言理解。来源锚负责发现“依据变了”，事实断言负责核验少量关键语义，其余正文仍需代码审查、产品测试或专门领域检查器证明。
 
-### 5.4 产品正式验收已接入，并暴露当前协议锁 blocker
+### 5.4 产品正式验收已接入，并验证 clean-v1 正式锁
 
 `check.product.formal` 独立运行产品自身要求的两个正式入口：
 
@@ -240,7 +240,7 @@ python scripts/run_conformance.py --quiet
 python scripts/audit_protocol_governance.py
 ```
 
-两个命令即使前一个失败也都会执行，任一失败都会阻断 floor 和 complete。当前权威协议源已经形成 clean-v1 四层 75 合同候选，产品也有四层投影与 clean Base 候选；但源提交尚未发布，嵌入式产品 Registry、v3 锁和正式 Base 仍属于 unified-v1。治理必须继续把这种不一致报告为 blocker，不能用本地候选证据冒充正式切换。
+两个命令即使前一个失败也都会执行，任一失败都会阻断 floor 和 complete。权威协议源的 clean-v1 四层 75 合同已经发布，产品正式使用单一来源 v4 Registry、clean Base 和精确摘要锁；旧工作台运行兼容事实保存在由同一锁固定的产品自有 runtime compatibility catalog，不再混入治理 Registry。任何源提交、数据库、Base 或运行目录摘要不一致仍必须报告为 blocker。
 
 ### 5.5 Boundary 检查仍需逐条增加行为证据
 
@@ -255,9 +255,9 @@ python scripts/audit_protocol_governance.py
 
 ### 5.6 工作台到 DR 已升级为 CF-CRE@2 + clean-v1 真实场景
 
-场景现在由真实 Workbench API 创建、保存、调优、验证和认证 Flow，再用现有产品 CF-CRE@2 构建器生成签名包。产品 clean Distribution 投影器从临时 v4 Registry 生成 installation request/plan，DR 的真实 Go Store 完成验签、物化和激活并返回 installation result；成功与篡改失败结果都由产品 clean Schema 反向验证。随后 DR 完成公开设置读取与保存、必需输入拒绝和成功交付，篡改失败不得改变活动卡带。
+场景现在由真实 Workbench API 创建、保存、调优、验证和认证 Flow，再用现有产品 CF-CRE@2 构建器生成签名包。产品 clean Distribution 投影器从正式 v4 Registry 生成 installation request/plan，DR 的真实 Go Store 完成验签、物化和激活并返回 installation result；成功与篡改失败结果都由产品 clean Schema 反向验证。随后 DR 完成公开设置读取与保存、必需输入拒绝和成功交付，篡改失败不得改变活动卡带。
 
-当前 Workbench 包装 API 仍硬编码 CF-CRE@1，因此场景明确记录其实际打包入口为 `core.protocol.build_release_archive`，不伪称工作台包装 API 已支持 v2。clean Base 也仍是候选而非正式活动清单。
+当前 Workbench 包装 API 仍硬编码 CF-CRE@1，因此场景明确记录其实际打包入口为 `core.protocol.build_release_archive`，不伪称工作台包装 API 已支持 v2。clean Base 已是正式活动清单，这个包装 API 缺口仍独立保留。
 
 同一真实包现在携带非空被动 UI 资产和 `local_resource` 能力声明。DR 从安装后的包提供 UI，并把 `document_lookup` 资源角色解析到宿主注入的 `remote_api` 连接；流程实际调用临时 HTTP 资源并把返回值交付。清单能力来源、流程传输类型和宿主连接三层分别验证，不再用认证警告或 mock 结果代替运行证据。
 
@@ -276,15 +276,15 @@ python scripts/audit_protocol_governance.py
 
 未结构化的自然语言正文仍不能由通用扫描器判真；新增领域必须先选择稳定关键事实，再增加受限断言或专门产品检查器。
 
-### 5.8 权威发布和仓库状态尚不可复现
+### 5.8 权威协议发布已可复现，整个产品工作区仍需分别审阅
 
-治理仓库已建立可审阅 Git 基线。clean 产品投影和 DR clean 消费者分别具有目标仓提交，但 CartridgeFlow 仍存在其他工作区变化，DR 仍是 CartridgeFlow 目录中的独立嵌套仓库，协议源提交也尚未发布；这些目标仓库状态不能由治理数据库替代。
+治理仓库已建立可审阅 Git 基线。clean 产品投影和 DR clean 消费者分别具有目标仓提交，协议源提交已发布到 `release/clean-v1` 并由产品 v4 锁精确引用。CartridgeFlow 仍存在其他工作区变化，DR 仍是 CartridgeFlow 目录中的独立嵌套仓库；这些目标仓库状态不能由治理数据库替代。
 
 数据库摘要可以证明某个文件内容没有变化，但不能替代代码、检查器、目标配置和数据库发布物的可审阅 Git 历史。
 
 ### 5.9 完整验收已包含产品协议锁一致性
 
-产品协议锁审计和完整 conformance 现在属于 blocker 级 `floor` 验收。当前不一致会明确形成失败证据，并使 `complete` 失败；静态无 finding 不再能覆盖它。
+产品协议锁审计和完整 conformance 现在属于 blocker 级 `floor` 验收。当前正式 clean-v1 锁一致；未来任何不一致都会形成失败证据并使 `complete` 失败，静态无 finding 不能覆盖它。
 
 ### 5.10 全局目录已不再形成普通证据的全局失效域
 

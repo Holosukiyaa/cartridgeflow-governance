@@ -8,10 +8,10 @@ runtime or build dependency of either product.
 The current catalog contains 23 cards: one constitution, five real dependency
 floors, seven cross-floor boundaries, nine reusable knowledge cards, and one
 task template. The locked product registry is observed rather than adopted as
-governance authority: all 59 currently embedded releases have an explicit
-`boundary`, `knowledge`, or `legacy-review` disposition. The unpublished
-clean-v1 source has 75 candidate contracts and remains separate until the
-product is relocked.
+governance authority: all 75 active clean-v1 contracts have an explicit
+`boundary` or `knowledge` disposition. The published source commit, v4 product
+lock, clean Base, and separate product-owned runtime compatibility catalog are
+verified together by product conformance.
 
 ## Dependency Rule
 
@@ -88,8 +88,9 @@ The CLI and browser report `static`, `floor`, `boundary`, `scenario`, and
 `complete` separately. A scoped run leaves unexecuted stages as `not-run`.
 Complete acceptance requires all four underlying stages to pass. The product's
 official protocol lock audit and conformance suite are a blocker-level floor
-check; at the current workspace state they correctly fail because the embedded
-protocol source database and commit do not match the product lock.
+check. The published clean-v1 source, embedded Registry, runtime compatibility
+catalog, Base, and v4 lock currently agree; any digest or commit mismatch still
+fails the floor and complete states closed.
 
 The dependency scanner uses Python's standard AST, each frontend package's
 declared TypeScript compiler, and the pinned Tree-sitter Go grammar. Resolved

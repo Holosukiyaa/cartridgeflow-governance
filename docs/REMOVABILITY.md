@@ -9,7 +9,7 @@ The governance scaffold passes both required modes:
 The current acceptance compares product Base identity, default protocol and 181
 API routes; builds DR twice with `-trimpath`; compares the resulting binary
 SHA-256 digests; and compares normalized DR runtime status. The observed binary
-digest is `8f3d082865fda04b6cdd44a6729318bec43801404f2b1a7211fcbc9977b8c381`
+digest is `481fa9e9a119cb24b41f4a5bb9f5f395f4ddb6ecc5782483e74b5785861b1595`
 in both modes.
 
 The cross-repository delivery proof is a separate required scenario. It creates

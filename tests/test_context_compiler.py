@@ -170,7 +170,7 @@ class ContextCompilerTests(unittest.TestCase):
             DEFAULT_INDEX,
             [],
             targets_path=DEFAULT_TARGETS,
-            contract_specs=["cartridgeflow:cartridgeflow.distribution.envelope@1.0.0"],
+            contract_specs=["cartridgeflow:cartridgeflow.package.manifest@1.0.0"],
             goal="Review the public distribution envelope",
         )
         card_ids = {item["card_id"] for item in context["cards"]}

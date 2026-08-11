@@ -112,7 +112,7 @@ def main() -> None:
         desktop.screenshot(path=str(OUTPUT / "browser-context-desktop.png"), full_page=True)
 
         desktop.get_by_label("目标路径").fill("")
-        desktop.get_by_label("公开合同").fill("cartridgeflow:cartridgeflow.distribution.envelope@1.0.0")
+        desktop.get_by_label("公开合同").fill("cartridgeflow:cartridgeflow.package.manifest@1.0.0")
         desktop.get_by_role("button", name="编译上下文").click()
         desktop.wait_for_load_state("networkidle")
         assert desktop.get_by_text("precise", exact=True).is_visible()

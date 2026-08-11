@@ -133,7 +133,7 @@ class CardBrowserTests(unittest.TestCase):
     def test_contract_context_shows_reverse_routed_scenario(self) -> None:
         response = self.client.get(
             "/context",
-            params={"contracts": "cartridgeflow:cartridgeflow.distribution.envelope@1.0.0"},
+            params={"contracts": "cartridgeflow:cartridgeflow.package.manifest@1.0.0"},
         )
         self.assertEqual(200, response.status_code)
         self.assertIn("boundary.cartridge-handoff", response.text)
