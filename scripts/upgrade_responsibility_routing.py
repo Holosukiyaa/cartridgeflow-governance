@@ -77,7 +77,7 @@ def upgrade(package: dict[str, Any]) -> bool:
         {
             "scenario_id": "scenario.workbench-to-dr",
             "title": "工作台到 DR 的真实卡带交付",
-            "description": "工作台生成并认证 Flow，产品 CF-CRE@2 构建器签名发行，DR 独立安装、消费公开设置、运行并产生交付结果。",
+            "description": "工作台生成并认证 Flow，通过正式包装 API 发行 CF-CRE@2 与 clean 安装计划，DR 通过公开安装 API 独立安装、消费公开设置、运行并产生交付结果。",
             "status": "active",
         },
     )

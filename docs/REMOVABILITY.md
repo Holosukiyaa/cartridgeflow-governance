@@ -14,10 +14,11 @@ in both modes.
 
 The cross-repository delivery proof is a separate required scenario. It creates
 a temporary Flow through the Workbench API, initializes and activates tuning,
-validates compatibility, applies certification, produces a signed `CF-CRE@2`
-package with settings and UI contracts, and projects a clean-v1 installation
-request and plan. A temporary DR verifies, materializes and activates the
-package, returns a product-validated clean-v1 result, consumes and persists a
+validates compatibility, applies certification, and asks the production package
+API for a signed `CF-CRE@2` package plus its clean-v1 installation request and
+plan. A temporary DR consumes them through `/api/install`, verifies,
+materializes and activates the package, returns a product-validated clean-v1
+result, consumes and persists a
 public cartridge setting, rejects missing required input, completes a valid run
 through a host-bound `remote_api` resource, serves the package's non-empty
 passive UI, produces the expected delivery, and rejects a tampered package with a failed

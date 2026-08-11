@@ -91,10 +91,11 @@ clean Base manifest and formal conformance agree.
 `check_removability.py` runs product and DR probes with the governance location
 present and with a nonexistent governance path. Product API/base/catalog facts,
 DR build digest and DR runtime status must be identical. The independent real
-handoff scenario uses the Workbench authoring API to create, validate, certify
-and package a temporary CF-CRE@2 cartridge. The product clean-v1 projector emits
-the installation request and plan, the real DR store verifies, materializes and
-activates them, and the product contract validator checks DR's result. DR then
+handoff scenario uses the Workbench authoring and production package APIs to
+create, validate, certify and package a temporary CF-CRE@2 cartridge. The package
+response carries the product-projected clean-v1 installation request and plan;
+DR consumes them through its public install API, and the product contract
+validator checks DR's result. DR then
 exposes and saves a public setting and runs the cartridge. Missing input and
 tampered packages must be rejected without mutating the active cartridge; the
 tampered path must return a valid failed clean-v1 result. The same package has a

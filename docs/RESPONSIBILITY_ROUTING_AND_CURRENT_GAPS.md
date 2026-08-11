@@ -255,9 +255,9 @@ python scripts/audit_protocol_governance.py
 
 ### 5.6 工作台到 DR 已升级为 CF-CRE@2 + clean-v1 真实场景
 
-场景现在由真实 Workbench API 创建、保存、调优、验证和认证 Flow，再用现有产品 CF-CRE@2 构建器生成签名包。产品 clean Distribution 投影器从正式 v4 Registry 生成 installation request/plan，DR 的真实 Go Store 完成验签、物化和激活并返回 installation result；成功与篡改失败结果都由产品 clean Schema 反向验证。随后 DR 完成公开设置读取与保存、必需输入拒绝和成功交付，篡改失败不得改变活动卡带。
+场景现在由真实 Workbench API 创建、保存、调优、验证和认证 Flow，并通过 `POST /api/cartridges/{cartridge_id}/package` 完成正式发行。共享发行服务读取卡带自有的 settings、bindings 和 UI 合同，构建并验签 CF-CRE@2，从正式 v4 Registry 投影 installation request/plan，只有全部步骤通过后才原子发布归档。DR 再通过真实 `POST /api/install` 完成验签、物化和激活并返回 installation result；成功与篡改失败结果都由产品 clean Schema 反向验证。随后 DR 完成公开设置读取与保存、必需输入拒绝和成功交付，篡改失败不得改变活动卡带。
 
-当前 Workbench 包装 API 仍硬编码 CF-CRE@1，因此场景明确记录其实际打包入口为 `core.protocol.build_release_archive`，不伪称工作台包装 API 已支持 v2。clean Base 已是正式活动清单，这个包装 API 缺口仍独立保留。
+CreatorRuntimeBridge 仍是独立的设计事实物化兼容入口。它没有 settings、bindings 和 UI 的显式公开合同，因此继续生成 CF-CRE@1，并以 `compatibility`、`production_eligible=false` 标明状态；在 Creator 真正拥有这些合同前，不得为迁移到 CF-CRE@2 而生成虚假默认合同。
 
 同一真实包现在携带非空被动 UI 资产和 `local_resource` 能力声明。DR 从安装后的包提供 UI，并把 `document_lookup` 资源角色解析到宿主注入的 `remote_api` 连接；流程实际调用临时 HTTP 资源并把返回值交付。清单能力来源、流程传输类型和宿主连接三层分别验证，不再用认证警告或 mock 结果代替运行证据。
 
@@ -367,6 +367,8 @@ python scripts/audit_protocol_governance.py
 ### P1-5：补强 CF-CRE@2 与 clean-v1 真实边界（首个场景完成）
 
 - 已增加 CF-CRE@2 公共设置的工作台到 DR 场景，并覆盖 clean 安装 request/plan/result 的 Python-Go 等价性、成功和篡改失败。
+- Workbench 正式包装 API 已成为 CF-CRE@2 与 clean request/plan 的唯一场景发行入口，DR 仅通过公开安装 API 消费该交接。
+- CreatorRuntimeBridge 明确保留为非生产兼容入口，禁止在缺少显式公开合同的情况下伪装为 CF-CRE@2。
 - 已覆盖非空被动 UI 的宿主提供，以及 `local_resource` 角色到 `remote_api` 连接的实际解析和调用。
 - 为其他关键跨语言合同继续增加生产者/消费者等价性测试。
 - 明确每个 Boundary 的行为证据，而不仅是结构绑定。

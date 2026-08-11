@@ -371,6 +371,52 @@ def _http_text(url: str, *, expect: int = 200) -> str:
     return content
 
 
+def _http_install(
+    url: str,
+    archive_path: Path,
+    installation_request: dict[str, Any],
+    *,
+    expect: int,
+) -> dict[str, Any]:
+    boundary = "----cartridgeflow-handoff-" + uuid.uuid4().hex
+    request_json = json.dumps(installation_request, ensure_ascii=False).encode("utf-8")
+    archive_bytes = archive_path.read_bytes()
+    body = b"".join(
+        [
+            f"--{boundary}\r\n".encode("ascii"),
+            b'Content-Disposition: form-data; name="installation_request"\r\n',
+            b"Content-Type: application/json; charset=utf-8\r\n\r\n",
+            request_json,
+            b"\r\n",
+            f"--{boundary}\r\n".encode("ascii"),
+            f'Content-Disposition: form-data; name="archive"; filename="{archive_path.name}"\r\n'.encode("ascii"),
+            b"Content-Type: application/octet-stream\r\n\r\n",
+            archive_bytes,
+            b"\r\n",
+            f"--{boundary}--\r\n".encode("ascii"),
+        ]
+    )
+    request = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            status = response.status
+            content = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+        content = exc.read().decode("utf-8")
+    if status != expect:
+        raise HandoffError(f"POST {url} returned HTTP {status}, expected {expect}: {content}")
+    value = json.loads(content)
+    if not isinstance(value, dict):
+        raise HandoffError(f"POST {url} did not return an object")
+    return value
+
+
 def _wait_runtime(url: str, process: subprocess.Popen[Any]) -> None:
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
@@ -401,17 +447,7 @@ def main() -> int:
     os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
     from fastapi.testclient import TestClient
     from backend.main import PACKAGES_DIR, ROOT as PRODUCT_ROOT, app, registry
-    from core.protocol import (
-        CLEAN_SOURCE_ID,
-        CleanDistributionProjector,
-        ImplementationSource,
-        build_release_archive,
-        inspect_release_archive,
-        publish_protocol_knowledge_registry,
-        validate_clean_contract,
-    )
-    from core.protocol.release_signing import ensure_development_signing_identity, trusted_public_keys
-    from core.studio.release import release_archive_inputs
+    from core.protocol import validate_clean_contract
 
     client = TestClient(app)
     simulation = _expect_response(
@@ -465,101 +501,30 @@ def main() -> int:
         preflight = _expect_response(client.get(f"/api/studio/release/{flow_id}/preflight"), "release preflight")
         if not preflight.get("production_ready"):
             raise HandoffError(f"production preflight is blocked: {preflight.get('issues')}")
-        release_inputs = release_archive_inputs(cartridge.get("manifest") or manifest)
-        signing_identity = ensure_development_signing_identity(PRODUCT_ROOT, str(release_inputs["publisher_id"]))
-        archive_path = Path(PRODUCT_ROOT) / PACKAGES_DIR / f"{flow_id}-0.0.1.cf-cre.zip"
-        built = build_release_archive(
-            package_path,
-            archive_path,
-            publisher_id=str(release_inputs["publisher_id"]),
-            experience=release_inputs["experience"],
-            delivery=release_inputs["delivery"],
-            settings=settings,
-            settings_bindings=settings_bindings,
-            ui=ui,
-            release_envelope_version=2,
-            placement=str(release_inputs["placement"]),
-            required_capabilities=release_inputs["required_capabilities"],
-            required_permissions=release_inputs["required_permissions"],
-            signing_identity=signing_identity,
+        packaged = _expect_response(
+            client.post(
+                f"/api/cartridges/{flow_id}/package",
+                json={"package_mode": "production", "requested_by": "governance-e2e"},
+            ),
+            "package production handoff",
         )
-        inspection = inspect_release_archive(archive_path, trusted_keys=trusted_public_keys(PRODUCT_ROOT))
-        if not archive_path.is_file() or not inspection.get("activation_allowed"):
-            raise HandoffError(f"CF-CRE@2 builder did not produce an activation-ready archive: {inspection}")
-        packaged = {
-            "release_id": built["release_id"],
-            "protocol": inspection["report"]["protocol"],
-            "activation_allowed": inspection["activation_allowed"],
-            "signature": inspection["signature"],
-        }
+        archive_path = Path(PRODUCT_ROOT) / PACKAGES_DIR / str(packaged.get("filename") or "")
+        installation_request = packaged.get("installation_request")
+        installation_plan = packaged.get("installation_plan")
+        if packaged.get("protocol") != "CF-CRE@2" or not packaged.get("activation_allowed") or not archive_path.is_file():
+            raise HandoffError(f"Workbench did not publish an activation-ready CF-CRE@2 handoff: {packaged}")
+        validate_clean_contract("cartridgeflow.installation.request", installation_request, root=PRODUCT)
+        validate_clean_contract("cartridgeflow.installation.plan", installation_plan, root=PRODUCT)
 
         go = _go()
         with tempfile.TemporaryDirectory(prefix="cartridgeflow-governance-handoff-") as temporary:
             temp = Path(temporary)
             shell = temp / ("cf-shell.exe" if os.name == "nt" else "cf-shell")
-            install_probe = temp / ("clean-install-probe.exe" if os.name == "nt" else "clean-install-probe")
             _run([str(go), "build", "-trimpath", "-o", str(shell), "."], cwd=DR / "shell" / "go")
-            _run(
-                [str(go), "build", "-trimpath", "-o", str(install_probe), "./cmd/clean-install-probe"],
-                cwd=DR / "shell" / "go",
-            )
             env = os.environ.copy()
             env["CF_SHELL_DATA_ROOT"] = str(temp / "data")
             signature = packaged["signature"]
             _run([str(shell), "trust", "add", str(signature["key_id"]), str(signature["public_key"])], cwd=DR, env=env)
-            clean_registry = temp / "clean-protocol-registry.sqlite"
-            publish_protocol_knowledge_registry(
-                clean_registry,
-                PRODUCT / "protocol-source" / "protocol-source.sqlite",
-                implementation_sources=[ImplementationSource(CLEAN_SOURCE_ID, PRODUCT)],
-            )
-            installation_fact = {
-                "package_id": flow_id,
-                "target": "desktop-runner",
-                "plan_id": "install-" + flow_id,
-                "rollback": "enabled",
-                "request_id": "request-" + uuid.uuid4().hex,
-                "requested_at": "2030-01-01T00:00:00Z",
-                "requested_by": "governance-e2e",
-            }
-            clean_projector = CleanDistributionProjector(PRODUCT, registry_path=clean_registry)
-            installation_request, installation_plan = clean_projector.installation_request(installation_fact)
-            request_path = temp / "installation-request.json"
-            request_path.write_text(
-                json.dumps(installation_request, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
-            trust_store = temp / "data" / "release_keys" / "trusted_publishers.json"
-            install_probe_result = json.loads(
-                _run(
-                    [
-                        str(install_probe),
-                        "--archive", str(archive_path),
-                        "--request", str(request_path),
-                        "--trust-store", str(trust_store),
-                        "--data-root", str(temp / "data"),
-                    ],
-                    cwd=DR,
-                    env=env,
-                ).stdout
-            )
-            installation_result = install_probe_result.get("installation_result")
-            validate_clean_contract(
-                "cartridgeflow.installation.result",
-                installation_result,
-                root=PRODUCT,
-                registry_path=clean_registry,
-            )
-            install = install_probe_result.get("summary") or {}
-            result_payload = (installation_result or {}).get("payload") or {}
-            if (
-                not install_probe_result.get("materialized")
-                or not install.get("active")
-                or result_payload.get("status") != "succeeded"
-                or result_payload.get("package_id") != flow_id
-                or result_payload.get("plan_id") != installation_fact["plan_id"]
-            ):
-                raise HandoffError(f"clean-v1 install handoff was incomplete: {install_probe_result}")
             resource_server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _ResourceHandler)
             resource_thread = threading.Thread(target=resource_server.serve_forever, daemon=True)
             resource_thread.start()
@@ -576,6 +541,26 @@ def main() -> int:
             runtime_url = f"http://127.0.0.1:{port}"
             try:
                 _wait_runtime(runtime_url, server)
+                install_response = _http_install(
+                    runtime_url + "/api/install",
+                    archive_path,
+                    installation_request,
+                    expect=200,
+                )
+                installation_result = install_response.get("installation_result")
+                validate_clean_contract("cartridgeflow.installation.result", installation_result, root=PRODUCT)
+                install = install_response.get("cartridge") or {}
+                result_payload = (installation_result or {}).get("payload") or {}
+                request_payload = (installation_request or {}).get("payload") or {}
+                plan_payload = (installation_plan or {}).get("payload") or {}
+                if (
+                    not install.get("active")
+                    or result_payload.get("status") != "succeeded"
+                    or result_payload.get("package_id") != flow_id
+                    or result_payload.get("plan_id") != request_payload.get("plan_id")
+                    or result_payload.get("plan_id") != plan_payload.get("plan_id")
+                ):
+                    raise HandoffError(f"clean-v1 install handoff was incomplete: {install_response}")
                 runtime_settings = _http_json(
                     "PUT",
                     runtime_url + "/api/settings",
@@ -623,6 +608,28 @@ def main() -> int:
                     {"inputs": {"topic": "governance-e2e"}},
                 )
                 completed = completed_response.get("run") or {}
+                delivery = completed.get("delivery") or {}
+                if completed.get("status") != "completed" or delivery.get("status") != "produced" or delivery.get("value") != "governance-e2e":
+                    raise HandoffError(f"DR happy path did not produce the expected delivery: {completed}")
+                before = _http_json("GET", runtime_url + "/api/status").get("cartridge")
+                tampered = temp / "tampered.cf-cre.zip"
+                _tamper(archive_path, tampered)
+                rejected = _http_install(
+                    runtime_url + "/api/install",
+                    tampered,
+                    installation_request,
+                    expect=400,
+                )
+                rejected_text = json.dumps(rejected, ensure_ascii=False).lower()
+                if "digest" not in rejected_text and "release verification failed" not in rejected_text:
+                    raise HandoffError(f"DR tampered-package path did not report an integrity failure: {rejected_text}")
+                rejected_result = rejected.get("installation_result")
+                validate_clean_contract("cartridgeflow.installation.result", rejected_result, root=PRODUCT)
+                if ((rejected_result or {}).get("payload") or {}).get("status") != "failed":
+                    raise HandoffError(f"DR did not return a failed clean-v1 result: {rejected_result}")
+                after = _http_json("GET", runtime_url + "/api/status").get("cartridge")
+                if before != after:
+                    raise HandoffError("rejected installation mutated the active cartridge")
             finally:
                 server.terminate()
                 try:
@@ -633,39 +640,6 @@ def main() -> int:
                 resource_server.shutdown()
                 resource_server.server_close()
                 resource_thread.join(timeout=5)
-            delivery = completed.get("delivery") or {}
-            if completed.get("status") != "completed" or delivery.get("status") != "produced" or delivery.get("value") != "governance-e2e":
-                raise HandoffError(f"DR happy path did not produce the expected delivery: {completed}")
-            before = json.loads(_run([str(shell), "status"], cwd=DR, env=env).stdout)
-            tampered = temp / "tampered.cf-cre.zip"
-            _tamper(archive_path, tampered)
-            rejected = _run(
-                [
-                    str(install_probe),
-                    "--archive", str(tampered),
-                    "--request", str(request_path),
-                    "--trust-store", str(trust_store),
-                    "--data-root", str(temp / "data"),
-                ],
-                cwd=DR,
-                env=env,
-                expect=1,
-            )
-            rejected_text = (rejected.stdout + rejected.stderr).lower()
-            if "digest" not in rejected_text and "release verification failed" not in rejected_text:
-                raise HandoffError(f"DR tampered-package path did not report an integrity failure: {rejected_text}")
-            rejected_result = json.loads(rejected.stdout).get("installation_result")
-            validate_clean_contract(
-                "cartridgeflow.installation.result",
-                rejected_result,
-                root=PRODUCT,
-                registry_path=clean_registry,
-            )
-            if ((rejected_result or {}).get("payload") or {}).get("status") != "failed":
-                raise HandoffError(f"DR did not return a failed clean-v1 result: {rejected_result}")
-            after = json.loads(_run([str(shell), "status"], cwd=DR, env=env).stdout)
-            if before.get("cartridge") != after.get("cartridge"):
-                raise HandoffError("rejected installation mutated the active cartridge")
             report.update(
                 {
                     "ok": True,
@@ -676,7 +650,7 @@ def main() -> int:
                         "release_id": packaged["release_id"],
                         "protocol": packaged["protocol"],
                         "activation_allowed": packaged["activation_allowed"],
-                        "packaging_entrypoint": "core.protocol.build_release_archive",
+                        "packaging_entrypoint": f"POST /api/cartridges/{flow_id}/package",
                     },
                     "clean_protocol": {
                         "request_contract": installation_request["contract_id"],
@@ -697,6 +671,7 @@ def main() -> int:
                         "resource_role_resolved": True,
                         "delivery": delivery,
                         "tampered_package_rejected": True,
+                        "installation_entrypoint": "POST /api/install",
                     },
                 }
             )
