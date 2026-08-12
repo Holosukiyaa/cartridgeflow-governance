@@ -1,0 +1,4 @@
+interface:
+  display_name: "CartridgeFlow 治理开发"
+  short_description: "让 AI 按责任路由和真实验收高效开发 CF WS"
+  default_prompt: "使用 $cartridgeflow-governed-development 在 CF WS 中完成一次受治理的开发任务。"
