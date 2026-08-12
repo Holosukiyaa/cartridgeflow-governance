@@ -396,7 +396,7 @@ class GovernanceDatabaseTests(unittest.TestCase):
                 "reference_kind": "path",
                 "reference": "producer/fixture.py",
                 "purpose": "Current implementation anchor.",
-                "anchor_algorithm": "artifact-set-sha256-v1",
+                "anchor_algorithm": "artifact-set-sha256-v2",
                 "anchor_digest": "a" * 64,
             }
         )

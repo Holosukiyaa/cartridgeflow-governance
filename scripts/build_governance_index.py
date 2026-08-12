@@ -73,6 +73,17 @@ def path_matches(path: str, selector: str) -> bool:
 
 def _target_files(target_path: Path, governed_roots: list[str]) -> tuple[list[str], set[str], set[str]]:
     tracked = _nul_paths(_git_bytes(target_path, "ls-files", "-z", "--", *governed_roots))
+    hidden_index_paths = []
+    for item in _git_bytes(target_path, "ls-files", "-v", "-z", "--", *governed_roots).split(b"\0"):
+        if not item:
+            continue
+        flag, relative = item[:1].decode("ascii"), item[2:].decode("utf-8").replace("\\", "/")
+        if flag == "S" or flag.islower():
+            hidden_index_paths.append(relative)
+    if hidden_index_paths:
+        raise GovernanceIndexError(
+            "governed artifacts use hidden Git index flags: " + ", ".join(sorted(hidden_index_paths))
+        )
     untracked = _nul_paths(
         _git_bytes(target_path, "ls-files", "--others", "--exclude-standard", "-z", "--", *governed_roots)
     )
@@ -82,15 +93,71 @@ def _target_files(target_path: Path, governed_roots: list[str]) -> tuple[list[st
     return files, modified, untracked
 
 
+def _clean_index_blobs(
+    target_path: Path,
+    governed_roots: list[str],
+    clean_paths: set[str],
+) -> dict[str, bytes]:
+    blob_ids: dict[str, str] = {}
+    entries = _git_bytes(target_path, "ls-files", "--stage", "-z", "--", *governed_roots).split(b"\0")
+    for entry in entries:
+        if not entry:
+            continue
+        metadata, encoded_path = entry.split(b"\t", 1)
+        _, blob_id, stage = metadata.decode("ascii").split()
+        relative = encoded_path.decode("utf-8").replace("\\", "/")
+        if relative not in clean_paths:
+            continue
+        if stage != "0":
+            raise GovernanceIndexError(f"governed artifact has an unresolved index stage: {relative}")
+        blob_ids[relative] = blob_id
+    missing = sorted(clean_paths - set(blob_ids))
+    if missing:
+        raise GovernanceIndexError("cannot resolve governed Git blobs: " + ", ".join(missing))
+
+    unique_ids = sorted(set(blob_ids.values()))
+    completed = subprocess.run(
+        ["git", "-C", str(target_path), "cat-file", "--batch"],
+        input="".join(f"{blob_id}\n" for blob_id in unique_ids).encode("ascii"),
+        check=True,
+        capture_output=True,
+    )
+    contents: dict[str, bytes] = {}
+    offset = 0
+    for requested_id in unique_ids:
+        header_end = completed.stdout.find(b"\n", offset)
+        if header_end < 0:
+            raise GovernanceIndexError(f"Git batch output is incomplete for blob: {requested_id}")
+        resolved_id, object_type, encoded_size = completed.stdout[offset:header_end].decode("ascii").split()
+        if object_type != "blob":
+            raise GovernanceIndexError(f"governed Git object is not a blob: {requested_id}:{object_type}")
+        size = int(encoded_size)
+        content_start = header_end + 1
+        content_end = content_start + size
+        if content_end >= len(completed.stdout) or completed.stdout[content_end:content_end + 1] != b"\n":
+            raise GovernanceIndexError(f"Git batch payload is incomplete for blob: {requested_id}")
+        contents[resolved_id] = completed.stdout[content_start:content_end]
+        offset = content_end + 1
+    return {relative: contents[blob_id] for relative, blob_id in blob_ids.items()}
+
+
 def _target_snapshot(
     target_path: Path,
     governed_roots: list[str],
 ) -> tuple[list[dict[str, Any]], str, str, int, str]:
     files, modified, untracked = _target_files(target_path, governed_roots)
+    clean_paths = set(files) - modified - untracked
+    clean_contents = _clean_index_blobs(target_path, governed_roots, clean_paths)
     facts: list[dict[str, Any]] = []
     for relative in files:
         path = target_path / relative
-        content = path.read_bytes()
+        state = "untracked" if relative in untracked else "modified" if relative in modified else "tracked"
+        try:
+            # A clean tracked file is identified by its Git blob so equivalent
+            # worktrees remain stable across checkout line-ending policies.
+            content = clean_contents[relative] if state == "tracked" else path.read_bytes()
+        except (OSError, subprocess.CalledProcessError) as exc:
+            raise GovernanceIndexError(f"cannot read governed artifact: {relative}: {exc}") from exc
         facts.append(
             {
                 "artifact_id": relative,
@@ -98,7 +165,7 @@ def _target_snapshot(
                 "kind": path.suffix.lower().lstrip(".") or "file",
                 "size": len(content),
                 "digest": hashlib.sha256(content).hexdigest(),
-                "state": "untracked" if relative in untracked else "modified" if relative in modified else "tracked",
+                "state": state,
             }
         )
     head = _git_text(target_path, "rev-parse", "HEAD")

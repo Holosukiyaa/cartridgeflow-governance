@@ -30,7 +30,7 @@ except ImportError:  # Direct execution: python scripts/sync_knowledge_anchors.p
     from governance_ledger import DEFAULT_LEDGER, digest_payload, knowledge_snapshot_digest, record_knowledge_sync
 
 
-ANCHOR_ALGORITHM = "artifact-set-sha256-v1"
+ANCHOR_ALGORITHM = "artifact-set-sha256-v2"
 ANCHOR_SECTION = """# Knowledge 源码锚点
 
 Knowledge 卡只保存当前局部理解，不拥有规范规则或修订历史。每个 Knowledge 源码引用必须绑定审核时的确定性 artifact 集合摘要；摘要失配或无法解析时，代码事实优先，路由状态进入保守模式并扩大到对应目标楼层。同步原因和引用快照写入外部 Ledger。"""
@@ -151,7 +151,7 @@ def synchronize(
         return []
     for reference in package.get("source_references", []):
         reference.pop("anchored_artifact_paths", None)
-    package["publication_id"] = "knowledge-source-anchors-v1"
+    package["publication_id"] = "knowledge-source-anchors-v2"
     package["published_at"] = datetime.now(timezone.utc).isoformat()
     source_path = source_path.resolve()
     index_path = index_path.resolve()

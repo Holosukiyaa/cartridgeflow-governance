@@ -7,10 +7,12 @@ import tempfile
 import unittest
 from pathlib import Path
 from scripts.build_governance_index import (
+    GovernanceIndexError,
     _go_import_references,
     _go_module_path,
     _resolve_go_reference,
     _resolve_typescript_reference,
+    _target_snapshot,
     build_index,
     failing_findings,
     path_matches,
@@ -77,6 +79,48 @@ import (
         )
         with self.assertRaisesRegex(ValueError, "Go syntax tree contains an error"):
             _go_import_references(b"package broken\nimport (\n")
+
+    def test_clean_tracked_digest_uses_git_blob_across_checkout_line_endings(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "CartridgeFlow"
+            source = target / "src" / "sample.py"
+            source.parent.mkdir(parents=True)
+            (target / ".gitattributes").write_text("*.py text eol=crlf\n", encoding="ascii")
+            source.write_bytes(b"VALUE = 1\n")
+            subprocess.run(["git", "init", str(target)], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(target), "config", "user.name", "Governance Test"], check=True)
+            subprocess.run(
+                ["git", "-C", str(target), "config", "user.email", "governance-test@example.invalid"],
+                check=True,
+            )
+            subprocess.run(["git", "-C", str(target), "add", ".gitattributes", "src/sample.py"], check=True)
+            subprocess.run(
+                ["git", "-C", str(target), "commit", "-m", "fixture"],
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(target), "remote", "add", "origin", "https://example.invalid/CartridgeFlow.git"],
+                check=True,
+            )
+            expected, *_ = _target_snapshot(target, ["src"])
+
+            source.unlink()
+            subprocess.run(
+                ["git", "-C", str(target), "checkout-index", "--force", "--", "src/sample.py"],
+                check=True,
+            )
+            self.assertEqual(b"VALUE = 1\r\n", source.read_bytes())
+            observed, *_ = _target_snapshot(target, ["src"])
+
+            self.assertEqual(expected, observed)
+
+            subprocess.run(
+                ["git", "-C", str(target), "update-index", "--assume-unchanged", "src/sample.py"],
+                check=True,
+            )
+            with self.assertRaisesRegex(GovernanceIndexError, "hidden Git index flags"):
+                _target_snapshot(target, ["src"])
 
     def test_build_records_go_module_dependencies(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -119,7 +119,9 @@ CREATE TABLE card_source_reference (
     reference_kind TEXT NOT NULL CHECK (reference_kind IN ('path', 'symbol', 'api', 'artifact')),
     reference TEXT NOT NULL,
     purpose TEXT NOT NULL,
-    anchor_algorithm TEXT CHECK (anchor_algorithm IS NULL OR anchor_algorithm = 'artifact-set-sha256-v1'),
+    anchor_algorithm TEXT CHECK (
+        anchor_algorithm IS NULL OR anchor_algorithm IN ('artifact-set-sha256-v1', 'artifact-set-sha256-v2')
+    ),
     anchor_digest TEXT CHECK (anchor_digest IS NULL OR length(anchor_digest) = 64),
     CHECK ((anchor_algorithm IS NULL) = (anchor_digest IS NULL)),
     UNIQUE (card_id, target_id, reference_kind, reference)
