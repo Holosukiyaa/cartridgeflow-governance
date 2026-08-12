@@ -5,7 +5,7 @@ description: 在 CF WS 中实施受外挂治理的软件开发：先用治理索
 
 # CartridgeFlow 受治理开发
 
-当前技能版本：`1.0.0`。以同目录 `VERSION` 为机器可读版本。
+当前技能版本：`1.0.1`。以同目录 `VERSION` 为机器可读版本。
 
 目标是在动手前给出正确施工路线，让治理负责导航和验收，而不是等检查失败后再猜。治理仓是本技能的唯一维护源；本机 Codex 目录只是安装镜像，不得单独修改。
 
@@ -24,13 +24,13 @@ description: 在 CF WS 中实施受外挂治理的软件开发：先用治理索
 ## 强制工作流
 
 1. **定义变更面**：从用户目标提取预计路径、公开合同和目标仓。未知时先用最窄合理路径路由，不凭关键词猜楼层。
-2. **先建任务根目录**：使用 `C:\_HOLOLAB\worktrees\<task>\`。在其中为三个正式仓建立同级真实 Git worktree，并复制根 `AGENTS.md`。受影响仓使用任务分支；未修改仓使用 detached worktree。不要用目录联接或符号链接代替真实 worktree。
+2. **先建任务根目录**：使用 `C:\_HOLOLAB\worktrees\<task>\`。在其中为三个正式仓建立同级真实 Git worktree，并复制根 `AGENTS.md`。任务根只允许这三个 worktree 和 `AGENTS.md`；截图、构建包、浏览器数据、测试夹具及其他临时产物放到 `C:\_HOLOLAB\worktree-artifacts\<task>\`。受影响仓使用任务分支；未修改仓使用 detached worktree。不要用目录联接或符号链接代替真实 worktree。
 3. **准备依赖**：在任务产品 worktree 的 `src/intent-studio` 与 `src/capability-workshop` 运行 `npm ci`。先确认 Python、Node、Go 等目标仓原生工具可用。
 4. **重建任务索引**：从任务治理 worktree 运行 `python scripts/build_governance_index.py build` 与 `verify`。三个仓同级时直接使用受版本控制的 `targets.json`，不要临时改检查器或产品构建配置来迁就路径。
 5. **编译责任上下文**：路径必须写成 `target-id:relative/path`。公开合同变化同时传 `--contract`。阅读返回的 Floor、Knowledge、Boundary、Scenario、检查器和 finding；歧义、冲突、unknown 或公开合同变化时按治理结果扩大验证，不扩大代码范围。
 6. **只在任务 worktree 编辑**：遵循目标仓既有模式。产品和 DR 不得读取、导入、启动、记录或要求治理存在。未发布协议代际不得进入实现；先核对产品协议锁、运行时能力和消费者。
 7. **先跑目标仓原生证明**：从最小相关测试开始，再扩大到构建、协议审计和 conformance。UI 必须做真实浏览器行为与布局验证；跨仓合同必须验证真实消费者，不以生产者单测代替。
-8. **再跑治理验收**：目标仓尚有变更时优先 `run_governance_checks.py --changed`；目标仓已经提交时显式传所有变更路径。区分 static、floor、boundary、scenario、complete，禁止把静态通过表述为产品通过。
+8. **再跑治理验收**：最后一次目标仓源码或生成物变化后，重新运行治理索引 `build` 与 `verify`，再执行验收；不要用路由阶段的旧索引检查收尾状态。目标仓尚有变更时优先 `run_governance_checks.py --changed`；目标仓已经提交时显式传所有变更路径。区分 static、floor、boundary、scenario、complete，禁止把静态通过表述为产品通过。
 9. **提交与合并分仓处理**：每个仓独立提交。确认正式副本干净且没有用户改动后，才允许 `--ff-only` 合并。不得覆盖、重置或清理不属于本任务的变更。
 10. **最后同步知识**：只有源码已审核、原生证明与治理检查通过后，才运行 `sync_knowledge_anchors.py`。Knowledge 只保存当前理解；施工历史与失败运行留在 Ledger。同步后再次验证 source、index、ledger 与 finding。
 11. **交付事实**：报告改了什么、正式合同代际、真实消费者证明、各验收状态、提交与合并状态、是否推送，以及仍存在的外部条件。未获明确授权不推送远端。

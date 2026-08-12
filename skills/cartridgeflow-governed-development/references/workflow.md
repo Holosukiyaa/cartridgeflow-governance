@@ -14,6 +14,8 @@ C:\_HOLOLAB\worktrees\<task>\
 
 三个仓必须是真实 Git worktree 且互为同级目录。这样 `targets.json`、Floor 检查、真实交接场景和可拆卸性检查都能使用仓库原生路径约定。即使某仓不修改，也建立 detached worktree 供检查读取。
 
+任务根不得出现第四个目录。浏览器截图、临时数据库、真实 E2E 数据和本地交付包统一放在 `C:\_HOLOLAB\worktree-artifacts\<task>\`；否则可拆卸性检查会把它们判定为污染的非正式内容。
+
 ## 1. 创建任务 worktree
 
 在正式 `CF WS` 根目录只执行 Git 管理命令，不编辑文件：
@@ -89,6 +91,13 @@ npm --prefix src/capability-workshop run build
 DR 使用目标仓 `go.mod` 所在目录运行相关 `go test`。若 `go` 不在 PATH，先使用治理检查器已有的工具链发现方式或定位 `C:\_HOLOLAB\toolchains`，不要修改产品源码。
 
 ## 5. 治理验收
+
+最后一次目标仓代码、锁文件或生成物变化后，先重建并验证索引：
+
+```powershell
+python scripts/build_governance_index.py build
+python scripts/build_governance_index.py verify
+```
 
 目标仓仍有未提交变更：
 
