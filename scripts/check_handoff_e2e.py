@@ -24,7 +24,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 PRODUCT = ROOT.parent / "CartridgeFlow"
-DR = PRODUCT / "DR"
+DR = ROOT.parent / "CartridgeFlow-runtime-shell"
 REPORT = ROOT / ".data" / "handoff-e2e-report.json"
 
 

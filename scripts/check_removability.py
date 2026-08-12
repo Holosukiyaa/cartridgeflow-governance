@@ -15,7 +15,7 @@ from check_dr_floor import go_tool
 
 ROOT = Path(__file__).resolve().parents[1]
 PRODUCT = ROOT.parent / "CartridgeFlow"
-DR = PRODUCT / "DR"
+DR = ROOT.parent / "CartridgeFlow-runtime-shell"
 REPORT = ROOT / ".data" / "removability-report.json"
 
 

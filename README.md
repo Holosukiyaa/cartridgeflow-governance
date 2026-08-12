@@ -1,176 +1,78 @@
-# CartridgeFlow Governance Cards
+# CartridgeFlow 外挂卡片治理
 
-This repository is the detachable governance scaffold for CartridgeFlow. It
-observes the product and Desktop Runner repositories, publishes scoped cards to
-an independent SQLite source, and produces diagnostics without becoming a
-runtime or build dependency of either product.
+本仓库是 CartridgeFlow 的外部、可拆卸治理脚手架。它使用 SQLite 卡片、确定性责任路由、检查器和只读浏览器管理多个正式代码仓，但目标产品不导入这里的代码、数据库或服务。
 
-The current catalog contains 23 cards: one constitution, five real dependency
-floors, seven cross-floor boundaries, nine reusable knowledge cards, and one
-task template. The locked product registry is observed rather than adopted as
-governance authority: all 75 active clean-v1 contracts have an explicit
-`boundary` or `knowledge` disposition. The published source commit, v4 product
-lock, clean Base, and separate product-owned runtime compatibility catalog are
-verified together by product conformance.
-
-## Dependency Rule
+## 仓库边界
 
 ```text
-CartridgeFlow Governance -> reads CartridgeFlow and Desktop Runner
-CartridgeFlow / Desktop Runner -X-> Governance
+CF WS/
+├── AGENTS.md                       # AI 施工总入口
+├── CartridgeFlow/                  # v0.7.0 工作台与共同内核
+├── CartridgeFlow-runtime-shell/    # v0.6.0-SP / DR 独立运行壳
+└── CartridgeFlow-governance/       # 外挂治理、知识卡与开发协作
+
+CF WS 之外
+└── CartridgeFlow-protocols/        # 协议本体唯一源
 ```
 
-Removing this repository must not change product build, startup, runtime, or
-delivery behavior.
+`CF WS` 根目录只容纳一个 AI 总入口和三个正式集成工作副本。任务工作树、临时克隆、归档、缓存和协议源必须放在工作区之外。产品源码仓只保留运行、构建、发布、测试以及独立使用必需的文档；架构、责任路由、知识、任务和 AI 施工材料归本仓库。
 
-## Databases
+## 权威数据
 
-- `governance-source.sqlite`: reviewed cards, scopes, relations, rules,
-  checker bindings, and scenarios. This is the authoritative governance source.
-- `.data/governance-index.sqlite`: generated source observations, coverage,
-  symbols, product contracts, Knowledge source-anchor state, findings, and
-  deterministic context chunks. It can be discarded and rebuilt.
-- `governance-ledger.sqlite`: append-only routing runs, check plans and results,
-  five-state acceptance snapshots, exact evidence footprints, diagnostics, and
-  `knowledge_sync_event` records. Index rebuilds never remove Ledger events.
+| 数据库 | 内容 | 能否重建 |
+| --- | --- | --- |
+| `governance-source.sqlite` | 当前卡片、作用域、关系、规则和检查绑定 | 否 |
+| `.data/governance-index.sqlite` | 当前代码、符号、依赖、合同和发现项 | 是 |
+| `governance-ledger.sqlite` | 路由、检查、验收和知识同步事件 | 否 |
 
-Normative `constitution`, `floor`, and `boundary` cards have independent
-revision histories. A `knowledge` card is intentionally current-only: it has no
-revision number, owns no rules, explains exactly one floor, and records reusable
-architecture knowledge rather than timelines, work logs, or pipeline history.
-Task cards are current work envelopes and likewise have no revision history.
+原则是：卡片无历史，审计有事件；全局目录不等于全局失效域；静态通过不等于产品通过；不确定性只能扩大验证范围。
 
-The existing CartridgeFlow `protocol-source.sqlite` is intentionally not used
-as the card store. Product contracts and governance cards have independent
-identities and lifecycles.
+## 文档入口
 
-## Commands
+- [治理架构](docs/GOVERNANCE_ARCHITECTURE.md)：卡片角色、责任路由、合同分类和证据模型。
+- [责任路由与当前缺口](docs/RESPONSIBILITY_ROUTING_AND_CURRENT_GAPS.md)：实现现状、P0 缺口与路由原则。
+- [项目版本谱系](docs/PROJECT_STATUS_AND_LINEAGE.md)：v0.6.0、v0.6.0-SP 与 v0.7.0 的分叉关系。
+- [产品体验架构](docs/PRODUCT_EXPERIENCE_ARCHITECTURE.md)：工作台产品决策。
+- [协议重建输入](docs/protocol-rebuild/target-protocol-architecture.md)：协议重建目标与业务能力清单。
+- [TODO](TODO.md)：当前治理阶段任务；不是产品运行依赖。
+- [AGENTS.md](AGENTS.md)：AI 和工程师接手本体系的入口。
+
+## 确定性闭环
+
+```text
+变更路径 / 公开合同
+  -> Floor 与局部 Knowledge
+  -> Boundary、生产者、消费者与 Scenario
+  -> 审核过的检查计划
+  -> static / floor / boundary / scenario / complete
+  -> 精确依赖足迹写入 Ledger
+```
+
+语义搜索只能给出建议，不能决定所有权、依赖、合规或验收。未覆盖、含糊或知识锚点过期时，路由必须进入保守模式并扩大检查范围。
+
+## 常用命令
 
 ```powershell
-python scripts/governance_db.py verify
-python scripts/governance_db.py summary
-python scripts/governance_db.py catalog
-python scripts/governance_db.py export --output .data/card-publication.json
-python scripts/check_detachability.py --snapshot
-python -m pip install -r requirements-scanner.txt
+python scripts/governance_db.py
+python scripts/check_workspace_layout.py
+python scripts/check_detachability.py
 python scripts/build_governance_index.py build
-python scripts/build_governance_index.py check
-python scripts/build_governance_index.py summary
+python scripts/build_governance_index.py
 python scripts/sync_knowledge_anchors.py
-python scripts/governance_ledger.py init
 python scripts/governance_ledger.py verify
-python scripts/governance_ledger.py freshness --index .data/governance-index.sqlite --targets targets.json
 python scripts/run_governance_checks.py --changed
 python scripts/check_handoff_e2e.py
 python scripts/check_removability.py
-python scripts/compile_context.py --path cartridgeflow:src/backend/main.py
-python scripts/launch_card_browser.py --no-browser
 python -m unittest discover -s tests -v
-python scripts/test_card_browser_e2e.py
 ```
 
-`build` always publishes the observed facts, including open findings. `check`
-is the enforcement entrypoint: it exits nonzero when findings meet its severity
-threshold (warning by default), so an AI worker receives a deterministic failure
-without losing the diagnostic index.
+完整、无作用域限制的 `run_governance_checks.py` 才能产生 `complete` 状态。局部检查只能说明对应阶段，不得把静态通过解释为产品通过。
 
-`run_governance_checks.py` is the normal acceptance entrypoint. With no scope it
-runs every enabled authoritative checker; `--changed` or repeated `--path`
-arguments select checkers through the affected cards and required rule bindings.
-Every run appends its route decision, exact command, checker digest, rule-level
-result, bounded output, and exact dependency footprint to the independent
-Ledger. Footprints include the cards, scopes, relations, artifacts, contracts,
-checker configuration, router, context compiler, target configuration, selected
-closure, and check plan actually used. An unrelated Knowledge change no longer
-invalidates evidence for another autonomous region.
-
-The CLI and browser report `static`, `floor`, `boundary`, `scenario`, and
-`complete` separately. A scoped run leaves unexecuted stages as `not-run`.
-Complete acceptance requires all four underlying stages to pass. The product's
-official protocol lock audit and conformance suite are a blocker-level floor
-check. The published clean-v1 source, locked product Registry, runtime compatibility
-catalog, Base, and v4 lock currently agree; any digest or commit mismatch still
-fails the floor and complete states closed.
-
-The dependency scanner uses Python's standard AST, each frontend package's
-declared TypeScript compiler, and the pinned Tree-sitter Go grammar. Resolved
-local imports are checked against active `depends_on` card relations, and every
-parser version is recorded in the index. A configured parser or compiler may
-not be missing or silently degrade to text matching.
-
-## Context Compilation
-
-The context compiler accepts exact `target-id:relative/path` inputs,
-`target-id:contract-id@version` contract inputs, or `--changed`. It selects primary owner cards, adds only knowledge cards whose
-scope matches the selected files, follows explicit `depends_on` relations,
-prefers task-goal-matched boundaries when several boundaries join the same
-floors, and includes findings attached to the selected files.
-
-An uncovered or ambiguous artifact produces `routing.state=conservative` and
-expands validation to the affected target. A public contract routes through its
-exact Contract Binding to the Boundary, then proactively expands its producer,
-consumer, and bound scenario.
-
-Every active Knowledge source reference carries a reviewed deterministic
-artifact-set digest. The generated index reports it as `current`, `stale`, or
-`unknown`. A selected stale or unknown Knowledge card cannot narrow work: the
-compiler enters conservative mode and adds the affected target floors. This is
-source-drift detection, not a claim that tooling understands arbitrary natural
-language. Each Knowledge card also carries at least one reviewed, restricted
-machine assertion (`artifact_exists`, `text_contains`, or
-`json_pointer_equals`). A conflict or indeterminate result produces a finding
-and the same conservative expansion. Assertions never execute card-provided
-commands and their rule remains owned by the global constitution.
-`sync_knowledge_anchors.py` is the explicit review-and-publish operation; each
-changed card appends a separate Ledger event.
-
-```powershell
-python scripts/compile_context.py `
-  --contract cartridgeflow:cartridgeflow.distribution.envelope@1.0.0 `
-  --goal "Review the cartridge handoff" `
-  --format markdown `
-  --output .data/task-context.md
-```
-
-Output is deterministic for the same card publication, governance facts, goal,
-and paths. Compilation rejects a stale index and fails when the rendered context
-exceeds `--max-chars`; semantic similarity is not used for normative selection.
-
-## Card Browser
-
-The local browser reads the source, generated index, and append-only Ledger in
-SQLite read-only mode. It exposes no write routes and binds to `127.0.0.1`.
+## 卡片浏览器
 
 ```powershell
 python -m pip install -r requirements-browser.txt
 python scripts/launch_card_browser.py --port 8041
 ```
 
-The first screen is the governance dashboard. The compact manager catalog links
-every card, rule, relationship, checker, and scenario without loading card
-bodies. Separate views cover cards, ownership/dependency/impact relations,
-source coverage and dependencies, symbols, all classified product contracts,
-findings, check evidence, exact impact queries, and deterministic task contexts.
-Knowledge details say `current-only` rather than displaying a fake revision.
-Lexical related-card suggestions are visibly advisory and never affect checks.
-
-`publish` accepts a reviewed JSON publication package and atomically creates a
-fresh database image:
-
-```powershell
-python scripts/governance_db.py publish <package.json>
-```
-
-Use `export` to create a temporary ignored publication package for review and
-editing, then publish it back atomically. Card content is read from SQLite after
-publication. The package carries revision history only for normative cards;
-verification rejects any knowledge-card history or rule binding, as well as
-missing, non-contiguous, identity-mismatched, or digest-mismatched normative
-snapshots. Do not create a parallel committed Markdown card tree.
-
-## Retrieval
-
-Deterministic scope and relation queries select required cards. FTS5 may help
-humans find text. Embeddings are deferred and, when introduced, may suggest
-related cards only; they can never create formal relations or compliance
-decisions.
+浏览器以只读方式打开三库并绑定 `127.0.0.1`。它统一展示卡片、作用域、关系、源码覆盖、公开合同、发现项、检查证据、影响查询和确定性任务上下文。不要再在产品仓维护第二套协议浏览器。

@@ -8,6 +8,11 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+try:
+    from scripts.check_workspace_layout import inspect_workspace
+except ModuleNotFoundError:  # 兼容 `python scripts/check_detachability.py` 入口。
+    from check_workspace_layout import inspect_workspace
+
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGETS_PATH = ROOT / "targets.json"
@@ -110,6 +115,8 @@ def main() -> int:
     args = parser.parse_args()
     try:
         errors, snapshot = inspect_targets(args.config.resolve())
+        if args.config.resolve() == TARGETS_PATH.resolve():
+            errors = inspect_workspace(ROOT.parent) + errors
         if errors:
             print("Detachability check failed:\n- " + "\n- ".join(errors))
             return 1

@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DR = ROOT.parent / "CartridgeFlow" / "DR"
+DR = ROOT.parent / "CartridgeFlow-runtime-shell"
 
 
 def go_tool() -> Path:

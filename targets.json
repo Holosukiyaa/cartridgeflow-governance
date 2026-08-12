@@ -28,7 +28,7 @@
     {
       "id": "desktop-runner",
       "role": "runtime-shell",
-      "path": "../CartridgeFlow/DR",
+      "path": "../CartridgeFlow-runtime-shell",
       "remote": "https://github.com/Holosukiyaa/cartridgeflow-runtime-shell.git",
       "governed_roots": [
         "shell"

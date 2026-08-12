@@ -25,7 +25,7 @@ def main() -> int:
     env["PYTHONPATH"] = str(PRODUCT / "src")
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     commands = [
-        [sys.executable, "scripts/audit_protocol_governance.py"],
+        [sys.executable, "scripts/audit_protocol_registry.py"],
         [sys.executable, "-B", "scripts/run_conformance.py", "--quiet"],
     ]
     results: list[dict[str, object]] = []

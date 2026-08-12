@@ -1,0 +1,4 @@
+interface:
+  display_name: "流程创作（CF-FARP@1.1）"
+  short_description: "创建并真实验证 CartridgeFlow 可执行流程"
+  default_prompt: "使用 $cartridgeflow-flow-author 创建或修改 CartridgeFlow 开发流程，并完成结构与真实交付验证。"

@@ -23,7 +23,7 @@ class ProductFormalCheckerTests(unittest.TestCase):
         self.assertEqual(1, exit_code)
         self.assertFalse(payload["ok"])
         self.assertEqual(2, run.call_count)
-        self.assertTrue(any("audit_protocol_governance.py" in item for item in run.call_args_list[0].args[0]))
+        self.assertTrue(any("audit_protocol_registry.py" in item for item in run.call_args_list[0].args[0]))
         self.assertTrue(any("run_conformance.py" in item for item in run.call_args_list[1].args[0]))
 
 
