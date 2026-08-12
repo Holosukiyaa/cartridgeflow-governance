@@ -88,7 +88,7 @@ The CLI and browser report `static`, `floor`, `boundary`, `scenario`, and
 `complete` separately. A scoped run leaves unexecuted stages as `not-run`.
 Complete acceptance requires all four underlying stages to pass. The product's
 official protocol lock audit and conformance suite are a blocker-level floor
-check. The published clean-v1 source, embedded Registry, runtime compatibility
+check. The published clean-v1 source, locked product Registry, runtime compatibility
 catalog, Base, and v4 lock currently agree; any digest or commit mismatch still
 fails the floor and complete states closed.
 

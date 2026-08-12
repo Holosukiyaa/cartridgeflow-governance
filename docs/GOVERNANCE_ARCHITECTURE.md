@@ -124,5 +124,5 @@ The CLI and browser show five distinct states: `static`, `floor`, `boundary`,
 `complete` is calculated only by a full unscoped run. Static success never means
 product success. The official product protocol audit and conformance entrypoint
 are a blocker-level floor checker. The current published clean-v1 source,
-embedded Registry, runtime compatibility catalog, clean Base and v4 lock agree.
+locked product Registry, runtime compatibility catalog, clean Base and v4 lock agree.
 Governance continues to report any mismatch and never rewrites the product side.

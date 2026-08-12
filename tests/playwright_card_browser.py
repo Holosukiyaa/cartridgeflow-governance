@@ -42,9 +42,10 @@ def main() -> None:
         acceptance = desktop.get_by_label("验收状态")
         assert "static" not in acceptance.inner_text().lower()
         for label in ("静态", "楼层", "边界", "场景", "完整"):
-            assert acceptance.get_by_text(label, exact=True).is_visible()
-        assert acceptance.get_by_text("passed", exact=True).count() == 3
-        assert acceptance.get_by_text("failed", exact=True).count() == 2
+            item = acceptance.locator("div", has_text=label)
+            assert item.get_by_text(label, exact=True).is_visible()
+            assert item.get_by_text("passed", exact=True).is_visible()
+        assert acceptance.get_by_text("failed", exact=True).count() == 0
         _assert_no_page_overflow(desktop)
         desktop.screenshot(path=str(OUTPUT / "browser-dashboard-desktop.png"), full_page=True)
 
