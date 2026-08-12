@@ -34,7 +34,6 @@ CF WS 之外
 - [项目版本谱系](docs/PROJECT_STATUS_AND_LINEAGE.md)：v0.6.0、v0.6.0-SP 与 v0.7.0 的分叉关系。
 - [产品体验架构](docs/PRODUCT_EXPERIENCE_ARCHITECTURE.md)：工作台产品决策。
 - [协议重建输入](docs/protocol-rebuild/target-protocol-architecture.md)：协议重建目标与业务能力清单。
-- [TODO](TODO.md)：当前治理阶段任务；不是产品运行依赖。
 - [AGENTS.md](AGENTS.md)：AI 和工程师接手本体系的入口。
 
 ## 确定性闭环
